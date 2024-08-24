@@ -3,6 +3,9 @@
 
 #include "fnFS.h"
 #include "tnfslib.h"
+#ifdef ESP_PLATFORM
+#include <esp_timer.h>
+#endif /* ESP_PLATFORM */
 
 class FileSystemTNFS : public FileSystem
 {

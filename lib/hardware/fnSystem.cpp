@@ -5,6 +5,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/task.h>
 #include <esp_system.h>
 #include <driver/gpio.h>
 #if CONFIG_IDF_TARGET_ESP32S3
@@ -15,13 +16,19 @@
 #include <esp_idf_version.h>
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 #include <esp_chip_info.h>
-#include <driver/adc.h>
 #include <hal/gpio_ll.h>
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+#define ADC_WIDTH_12Bit ADC_BITWIDTH_12
+#define ADC_ATTEN_11db ADC_ATTEN_DB_11
+#else
+#include <driver/adc.h>
+#include <esp_adc_cal.h>
 #define ADC_WIDTH_12Bit ADC_WIDTH_BIT_12
 #define ADC_ATTEN_11db ADC_ATTEN_DB_11
 #endif
 #include <soc/rtc.h>
-#include <esp_adc_cal.h>
 
 // ESP_PLATFORM
 #else
@@ -611,7 +618,8 @@ int SystemManager::get_sio_voltage()
 {
 #ifdef ESP_PLATFORM
 
-#if !defined(CONFIG_IDF_TARGET_ESP32S3) && defined(BUILD_ATARI)
+#if defined(BUILD_ATARI)
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
     // Configure ADC1_CH7
     adc1_config_width(ADC_WIDTH_12Bit);
     adc1_config_channel_atten(ADC1_CHANNEL_7, ADC_ATTEN_11db);
@@ -627,17 +635,66 @@ int SystemManager::get_sio_voltage()
     } else {
         Debug_println("SIO VREF: Default");
     }
+#else
+    adc_oneshot_unit_handle_t adc1_handle;
+    adc_oneshot_unit_init_cfg_t init_config1 = {
+         .unit_id = ADC_UNIT_1,
+         .ulp_mode = ADC_ULP_MODE_DISABLE,
+    };
+
+    adc_oneshot_chan_cfg_t config = {
+         .atten = ADC_ATTEN_11db,
+         .bitwidth = ADC_WIDTH_12Bit,
+    };
+
+    adc_cali_handle_t adc_cali_handle = nullptr;
+
+    adc_oneshot_new_unit(&init_config1, &adc1_handle);
+    adc_oneshot_config_channel(adc1_handle, ADC_CHANNEL_7, &config);
+
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    adc_cali_curve_fitting_config_t cali_config = {
+         .unit_id = ADC_UNIT_1,
+         .atten = ADC_ATTEN_11db,
+         .bitwidth = ADC_WIDTH_12Bit,
+    };
+    adc_cali_create_scheme_curve_fitting(&cali_config, &adc_cali_handle);
+#endif
+
+#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    adc_cali_line_fitting_config_t cali_config = {
+       .unit_id = ADC_UNIT_1,
+       .atten = ADC_ATTEN_11db,
+       .bitwidth = ADC_WIDTH_12Bit,
+    };
+    adc_cali_create_scheme_line_fitting(&cali_config, &adc_cali_handle);
+#endif
+
+#endif      // ESP_IDF_VERSION
 
     int samples = 10;
     uint32_t avgV = 0;
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
     uint32_t vcc = 0;
+#else
+    int vcc_raw = 0;
+    int vcc = 0;
+#endif
 
     for (int i = 0; i < samples; i++)
     {
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
         esp_adc_cal_get_voltage(ADC_CHANNEL_7, &adc_chars, &vcc);
+#else
+        adc_oneshot_read(adc1_handle, ADC_CHANNEL_7, &vcc_raw);
+        adc_cali_raw_to_voltage(adc_cali_handle, vcc_raw, &vcc);
+#endif
         avgV += vcc;
-        //delayMicroseconds(5);
     }
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    adc_oneshot_del_unit(adc1_handle);
+#endif
 
     avgV /= samples;
 
@@ -648,15 +705,12 @@ int SystemManager::get_sio_voltage()
         return (avgV * 3200 / 2000); // v1.6 and up (R1=1200, R2=2000)
     else
         return (avgV * 5900 / 3900); // (R1=2000, R2=3900)
-#else
-    return 0;
-#endif
 
-// ESP_PLATFORM
-#else
-// !ESP_PLATFORM
+#endif      // BUILD_ATARI
+
+#endif      // ESP_PLATFORM
+
     return 0;
-#endif
 }
 
 /*
@@ -1041,7 +1095,7 @@ void SystemManager::check_hardware_ver()
     /*  Apple II
         Check all the madness :zany_face:
     */
-#   if defined(MASTERIES_SPI_FIX)
+#   if defined(MASTERIES_REV0)
     Debug_printf("Masteries RevA SPI fix ENABLED\r\nNO3STATE Disabled\r\n");
     #ifdef PIN_SD_HOST_MOSI
     #undef PIN_SD_HOST_MOSI
@@ -1049,30 +1103,30 @@ void SystemManager::check_hardware_ver()
     #define PIN_SD_HOST_MOSI GPIO_NUM_14
     safe_reset_gpio = PIN_BUTTON_C;
     a2no3state = false;
-    a2spifix = true;
+    a2hasbuffer = true;
     _hardware_version = 5;
 #   elif defined(MASTERIES_REVAB)
     /* All Masteries boards have Tristate buffer. Check for pullup on IO14 to 
         determine if it's RevB
     */
-    int spifixupcheck, spifixdowncheck;
+    int hasbufferupcheck, hasbufferdowncheck;
 
     fnSystem.set_pin_mode(PIN_BUTTON_C, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_UP);
-    spifixupcheck = fnSystem.digital_read(PIN_BUTTON_C);
+    hasbufferupcheck = fnSystem.digital_read(PIN_BUTTON_C);
     fnSystem.set_pin_mode(PIN_BUTTON_C, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_DOWN);
-    spifixdowncheck = fnSystem.digital_read(PIN_BUTTON_C);
+    hasbufferdowncheck = fnSystem.digital_read(PIN_BUTTON_C);
 
-    if(spifixdowncheck == spifixupcheck)
+    if(hasbufferdowncheck == hasbufferupcheck)
     {
-        a2spifix = true;
-        Debug_printf("Masteries RevB Hardware Detected\r\nNO3STATE Disabled\r\nSPIFIX Enabled\r\n");
+        a2hasbuffer = true;
+        Debug_printf("Masteries RevB Hardware Detected\r\nNO3STATE Disabled\r\nHASBUFFER Enabled\r\n");
         _hardware_version = 6;
         safe_reset_gpio = GPIO_NUM_NC; // RevB has a Hard Reset button instead of GPIO connected button
     }
     else
     {
-        a2spifix = false;
-        Debug_printf("Masteries RevA Hardware Detected\r\nNO3STATE Disabled\r\nSPIFIX Disabled\r\n");
+        a2hasbuffer = false;
+        Debug_printf("Masteries RevA Hardware Detected\r\nNO3STATE Disabled\r\nHASBUFFER Disabled\r\n");
         _hardware_version = 4;
         safe_reset_gpio = PIN_BUTTON_C;
     }
@@ -1081,13 +1135,13 @@ void SystemManager::check_hardware_ver()
     /* For the 3 people on earth who got Rev1 hardware before the proper pullup
     used for hardware detection was added.
     */
-    a2spifix = true;
+    a2hasbuffer = true;
     a2no3state = true;
-    Debug_printf("Rev1 Hardware Defined\r\nFujiApple NO3STATE & SPIFIX Enabled\r\n");
+    Debug_printf("Rev1 Hardware Defined\r\nFujiApple NO3STATE & HASBUFFER Enabled\r\n");
     safe_reset_gpio = GPIO_NUM_4; /* Change Safe Reset GPIO for Rev 1 */
     _hardware_version = 3;
 #   else
-    int spifixupcheck, spifixdowncheck, rev1upcheck, rev1downcheck, bufupcheck, bufdowncheck;
+    int hasbufferupcheck, hasbufferdowncheck, rev1upcheck, rev1downcheck, bufupcheck, bufdowncheck;
 
     /* Apple 2 Rev 1 Latest has pulldown on IO25 for buffer/bus enable line
     If found, enable the buffer chips, spi fix, no tristate and safe reset on GPIO4
@@ -1100,7 +1154,7 @@ void SystemManager::check_hardware_ver()
     if (bufupcheck == bufdowncheck && bufupcheck == DIGI_LOW)
     {
         Debug_printf("FujiApple Rev1 Buffered Bus\r\nFujiApple NO3STATE Enabled\r\n");
-        a2spifix = true;
+        a2hasbuffer = true;
         a2no3state = true;
         safe_reset_gpio = GPIO_NUM_4; /* Change Safe Reset GPIO for Rev 1 */
         /* Enabled the buffer */
@@ -1120,7 +1174,7 @@ void SystemManager::check_hardware_ver()
 
         if (rev1upcheck == rev1downcheck && rev1downcheck == DIGI_HIGH)
         {
-            a2spifix = true;
+            a2hasbuffer = true;
             a2no3state = true;
             Debug_printf("FujiApple NO3STATE Enabled\r\n");
             safe_reset_gpio = GPIO_NUM_4; /* Change Safe Reset GPIO for Rev 1 */
@@ -1133,13 +1187,13 @@ void SystemManager::check_hardware_ver()
     Check for pullup and determine if safe reset button or SPI fix
     */
     fnSystem.set_pin_mode(PIN_BUTTON_C, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_UP);
-    spifixupcheck = fnSystem.digital_read(PIN_BUTTON_C);
+    hasbufferupcheck = fnSystem.digital_read(PIN_BUTTON_C);
     fnSystem.set_pin_mode(PIN_BUTTON_C, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_DOWN);
-    spifixdowncheck = fnSystem.digital_read(PIN_BUTTON_C);
+    hasbufferdowncheck = fnSystem.digital_read(PIN_BUTTON_C);
 
-    if(spifixdowncheck == spifixupcheck)
+    if(hasbufferdowncheck == hasbufferupcheck)
     {
-        a2spifix = true;
+        a2hasbuffer = true;
         Debug_println("FujiApple SPI fix Enabled");
         /* If hardware version has not been set yet, it's not a Rev1. Make it Rev00 With SPI fix */
         if (_hardware_version == 0)
@@ -1147,7 +1201,7 @@ void SystemManager::check_hardware_ver()
     }
     else
     {
-        a2spifix = false;
+        a2hasbuffer = false;
         Debug_println("FujiApple SPI fix not found");
         safe_reset_gpio = PIN_BUTTON_C;
         fnSystem.set_pin_mode(safe_reset_gpio, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_UP);

@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 
-
 #include "iwm.h"
 #include "fnSystem.h"
 
@@ -17,6 +16,7 @@
 #include "../../include/debug.h"
 #include "utils.h"
 #include "led.h"
+#include "string_utils.h"
 
 #include "../device/iwm/disk.h"
 #include "../device/iwm/disk2.h"
@@ -74,13 +74,14 @@ void print_packet(uint8_t *data)
   for (int i = 0; i < COMMAND_LEN; i++)
     Debug_printf("%02x ", data[i]);
 #else
-  for (int i = 0; i < 40; i++)
-  {
-    if (data[i] != 0 || i == 0)
-      Debug_printf("%02x ", data[i]);
-    else
-      break;
-  }
+  Debug_printv("packet:\r\n%s\r\n", mstr::toHex(data, 16).c_str());
+  // for (int i = 0; i < 40; i++)
+  // {
+  //   if (data[i] != 0 || i == 0)
+  //     Debug_printf("%02x ", data[i]);
+  //   else
+  //     break;
+  // }
 #endif
   // Debug_printf("\r\n");
 }
@@ -122,10 +123,6 @@ void print_packet_wave(uint8_t *data, int bytes)
 }
 
 //------------------------------------------------------------------------------
-
-// uint8_t iwmDevice::packet_buffer[BLOCK_PACKET_LEN] = { 0 };
-// uint16_t iwmDevice::packet_len = 0;
-// uint16_t iwmDevice::num_decoded = 0;
 
 uint8_t iwmDevice::data_buffer[MAX_DATA_LEN] = {0};
 int iwmDevice::data_len = 0;
@@ -704,10 +701,6 @@ void iwmBus::addDevice(iwmDevice *pDevice, iwm_fujinet_type_t deviceType)
     _modemDev = (iwmModem *)pDevice;
     break;
   case iwm_fujinet_type_t::Network:
-    // todo: work out how to assign different network devices - idea:
-    // include a number in the DIB name, e.g., "NETWORK 1"
-    // and extract that number from the DIB and use it as the index
-    //_netDev[device_id - SIO_DEVICEID_FN_NETWORK] = (iwmNetwork *)pDevice;
     break;
   case iwm_fujinet_type_t::CPM:
     _cpmDev = (iwmCPM *)pDevice;
