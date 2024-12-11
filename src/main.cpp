@@ -216,7 +216,7 @@ void main_setup(int argc, char *argv[])
     SIO.addDevice(&theFuji, SIO_DEVICEID_FUJINET); // the FUJINET!
 
     if (Config.get_apetime_enabled() == true)
-        SIO.addDevice(&apeTime, SIO_DEVICEID_APETIME); // APETime
+        SIO.addDevice(&clockDevice, SIO_DEVICEID_APETIME); // Clock for Atari, APETime compatible, but extended for additional return types
 
 #ifdef ESP_PLATFORM
     SIO.addDevice(&udpDev, SIO_DEVICEID_MIDI); // UDP/MIDI device
@@ -432,8 +432,8 @@ void main_setup(int argc, char *argv[])
 #ifdef ESP_PLATFORM
   #ifdef DEBUG
     unsigned long endms = fnSystem.millis();
-    Debug_printf("Available heap: %u\nSetup complete @ %lu (%lums)\r\n", fnSystem.get_free_heap_size(), endms, endms - startms);
-    Debug_printv("Low Heap: %lu\n",esp_get_free_internal_heap_size());
+    Debug_printf("\r\nAvailable heap: %u\r\nSetup complete @ %lu (%lums)\r\n", fnSystem.get_free_heap_size(), endms, endms - startms);
+    Debug_printv("Low Heap: %lu",esp_get_free_internal_heap_size());
   #endif // DEBUG
 #else
 // !ESP_PLATFORM
@@ -496,7 +496,7 @@ void fn_service_loop(void *param)
 
 #ifdef LEAK_DEBUG
   #ifdef ESP_PLATFORM
-        Debug_printv("Low Heap: %lu\r\n",esp_get_free_internal_heap_size());
+        Debug_printv("Low Heap: %lu",esp_get_free_internal_heap_size());
   #endif
 #endif
         SYSTEM_BUS.service();

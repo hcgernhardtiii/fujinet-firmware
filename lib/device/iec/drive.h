@@ -37,25 +37,29 @@ protected:
     std::unique_ptr<MFile> _base;   // Always points to current directory/image
     std::string _last_file;         // Always points to last loaded file
 
+    // RAM/ROM
+//    std::streambuf ram;
+    std::unique_ptr<MFile> rom;     // ROM File for current drive model if available
+
+    // Directory
+    uint16_t sendHeader(std::string header, std::string id);
+    uint16_t sendLine(uint16_t blocks, char *text);
+    uint16_t sendLine(uint16_t blocks, const char *format, ...);
+    uint16_t sendFooter();
+    void sendListing();
+
+    // File
+    bool sendFile();
+    bool saveFile();
+    void sendFileNotFound();
+
     // Named Channel functions
-    //std::shared_ptr<MStream> currentStream;
     bool registerStream (uint8_t channel);
     std::shared_ptr<MStream> retrieveStream ( uint8_t channel );
     bool closeStream ( uint8_t channel, bool close_all = false );
     uint16_t retrieveLastByte ( uint8_t channel );
     void storeLastByte( uint8_t channel, char last);
     void flushLastByte( uint8_t channel );
-
-    // Directory
-	uint16_t sendHeader(std::string header, std::string id);
-	uint16_t sendLine(uint16_t blocks, char *text);
-	uint16_t sendLine(uint16_t blocks, const char *format, ...);
-	uint16_t sendFooter();
-	void sendListing();
-
-    // File
-	bool sendFile();
-	bool saveFile();
 
     struct _error_response
     {
@@ -70,11 +74,18 @@ protected:
     void format();
 
 protected:
+#if 0
     /**
      * @brief Process command fanned out from bus
      * @return new device state
      */
     device_state_t process() override;
+#else
+    virtual device_state_t openChannel(/*int chan, IECPayload &payload*/) override;
+    virtual device_state_t closeChannel(/*int chan*/) override;
+    virtual device_state_t readChannel(/*int chan*/) override;
+    virtual device_state_t writeChannel(/*int chan, IECPayload &payload*/) override;
+#endif
 
     /**
      * @brief process command for channel 0 (load)
@@ -91,10 +102,12 @@ protected:
      */
     void process_command();
 
+#if 0
     /**
      * @brief process every other channel (2-14)
      */
     void process_channel();
+#endif
 
     /**
      * @brief called to open a connection to a protocol
@@ -116,6 +129,7 @@ protected:
      */
     void iec_reopen_save();
 
+#if 0
     /**
      * @brief called when REOPEN (to send/receive data)
      */
@@ -125,6 +139,7 @@ protected:
      * @brief called when channel needs to listen for data from c=
      */
     void iec_reopen_channel_listen();
+#endif
 
     /**
      * @brief called when channel needs to talk data to c=

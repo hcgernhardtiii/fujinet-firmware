@@ -2,10 +2,10 @@
 #ifndef DISK2_H
 #define DISK2_H
 
-#include "bus.h"
+#include "disk.h"
 #include "../media/media.h"
 
-class iwmDisk2 : public iwmDevice
+class iwmDisk2 : public iwmDisk
 {
 
 protected:
@@ -30,7 +30,7 @@ protected:
 public:
     iwmDisk2();
     void init();
-    mediatype_t mount(fnFile *f, uint32_t disksize, mediatype_t disk_type = MEDIATYPE_UNKNOWN);
+    virtual mediatype_t mount_file(fnFile *f, uint32_t disksize, mediatype_t disk_type) override;
     void unmount();
     bool write_blank(fnFile *f, uint16_t sectorSize, uint16_t numSectors);
     int get_track_pos() { return track_pos; };
@@ -52,7 +52,8 @@ public:
     bool isDrive2Enabled() { return enabledD2; };
     // void set_disk_number(char c) { disk_num = c; }
     // char get_disk_number() { return disk_num; };
-    mediatype_t disktype() { return _disk == nullptr ? MEDIATYPE_UNKNOWN : _disk->_mediatype; };
+
+    bool write_sector(int track, int sector, uint8_t* buffer);
 
     ~iwmDisk2();
 };

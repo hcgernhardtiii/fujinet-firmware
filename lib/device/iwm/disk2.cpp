@@ -42,11 +42,9 @@ void iwmDisk2::init()
   device_active = false;
 }
 
-mediatype_t iwmDisk2::mount(fnFile *f, uint32_t disksize, mediatype_t disk_type)//, const char *filename), uint32_t disksize, mediatype_t disk_type)
+mediatype_t iwmDisk2::mount_file(fnFile *f, uint32_t disksize, mediatype_t disk_type)
 {
-
   mediatype_t mt = MEDIATYPE_UNKNOWN;
- // mediatype_t disk_type = MEDIATYPE_WOZ;
 
   // Debug_printf("disk MOUNT %s\n", filename);
 
@@ -57,7 +55,7 @@ mediatype_t iwmDisk2::mount(fnFile *f, uint32_t disksize, mediatype_t disk_type)
     _disk = nullptr;
   }
 
-    switch (disk_type)
+  switch (disk_type)
     {
     case MEDIATYPE_WOZ:
         Debug_printf("\nMounting Media Type WOZ");
@@ -74,6 +72,8 @@ mediatype_t iwmDisk2::mount(fnFile *f, uint32_t disksize, mediatype_t disk_type)
         mt = ((MediaTypeDSK *)_disk)->mount(f, disksize);
         break;
     default:
+        Debug_printf("\r\nUnsupported Media Type for DiskII");
+        mt = MEDIATYPE_UNKNOWN;
         break;
     }
 
@@ -159,6 +159,11 @@ void IRAM_ATTR iwmDisk2::change_track(int indicator)
         NS_PER_BIT_TIME * ((MediaTypeWOZ *)_disk)->optimal_bit_timing);
 #endif // !SLIP
   // Since the empty track has no data, and therefore no length, using a fake length of 51,200 bits (6400 bytes) works very well.
+}
+
+bool iwmDisk2::write_sector(int track, int sector, uint8_t* buffer)
+{
+  return _disk->write_sector(track, sector, buffer);
 }
 
 #endif /* !SLIP */

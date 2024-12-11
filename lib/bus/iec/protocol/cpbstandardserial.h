@@ -33,23 +33,8 @@ namespace Protocol
 {
     class CPBStandardSerial : public IECProtocol
     {
-        private:
-        uint8_t receiveBits();
-        bool sendBits(uint8_t data);
-
-
         public:
 
-        /**
-         * @brief ctor
-         */
-        CPBStandardSerial();
-
-        /**
-         * @brief dtor
-         */
-        virtual ~CPBStandardSerial();
-        
         /**
          * @brief receive byte from bus
          * @return The byte received from bus.

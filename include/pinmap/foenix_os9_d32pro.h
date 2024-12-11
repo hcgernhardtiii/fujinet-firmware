@@ -1,13 +1,20 @@
 /* FujiNet Hardware Pin Mapping */
-#ifdef PINMAP_COCO_S3
+#ifdef PINMAP_FOENIX_OS9_D32PRO
 
-/* SD Card - fnFsSD.cpp */
+
+/* SD Card */
+// pins 12-15 are used to interface with the JTAG debugger
+// so leave them alone if we're using JTAG
+#ifndef JTAG
 #define PIN_CARD_DETECT         GPIO_NUM_12 // fnSystem.h
 #define PIN_CARD_DETECT_FIX     GPIO_NUM_15 // fnSystem.h
-#define PIN_SD_HOST_SCK         GPIO_NUM_4
-#define PIN_SD_HOST_MOSI        GPIO_NUM_5
-#define PIN_SD_HOST_MISO        GPIO_NUM_6
-#define PIN_SD_HOST_CS          GPIO_NUM_7
+#endif
+
+#define PIN_SD_HOST_CS          GPIO_NUM_4  // LOLIN D32 Pro
+#define PIN_SD_HOST_MISO        GPIO_NUM_19
+#define PIN_SD_HOST_MOSI        GPIO_NUM_23
+#define PIN_SD_HOST_SCK         GPIO_NUM_18
+
 
 /* UART - fnuart.cpp */
 #define PIN_UART0_RX            GPIO_NUM_3  // USB Serial
@@ -34,7 +41,7 @@
 #define PIN_CASS_MOTOR          GPIO_NUM_34 // Second motor pin is tied to +3V
 #define PIN_CASS_DATA_IN        GPIO_NUM_33
 #define PIN_CASS_DATA_OUT       GPIO_NUM_26
-#define PIN_CD                  GPIO_NUM_21 // same as atari PROC
+#define PIN_CD                  GPIO_NUM_22 // same as atari PROC
 #define PIN_EPROM_A14           GPIO_NUM_36 // Used to set the serial baud rate
 #define PIN_EPROM_A15           GPIO_NUM_39 // based on the HDB-DOS image selected
-#endif /* PINMAP_COCO_S3 */
+#endif /* PINMAP_FOENIX_OS9_D32PRO */

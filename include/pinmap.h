@@ -3,8 +3,11 @@
 #define PINMAP_H
 
 #ifdef ESP_PLATFORM
+#include <hal/gpio_types.h>
+
 #include "pinmap/a2_fn10.h"
 #include "pinmap/a2_rev0.h"
+#include "pinmap/a2_d32pro.h"
 #include "pinmap/mac_rev0.h"
 #include "pinmap/atariv1.h"
 #include "pinmap/adamv1.h"
@@ -12,7 +15,8 @@
 #include "pinmap/iec-d32pro.h"
 #include "pinmap/coco_devkitc.h"
 #include "pinmap/coco_cart.h"
-#include "pinmap/coco_s3.h"
+#include "pinmap/coco_esp32s3.h"
+#include "pinmap/foenix_os9_d32pro.h"
 #include "pinmap/iec-nugget.h"
 #include "pinmap/fujiloaf-rev0.h"
 #include "pinmap/fujiapple-iec.h"
@@ -24,6 +28,12 @@
 #include "pinmap/rc2014spi_rev0.h"
 #include "pinmap/heathkit_h89.h"
 #include "pinmap/atari2600.h"
+
+
+#ifndef PIN_DEBUG
+#define PIN_DEBUG		PIN_IEC_SRQ
+#endif
+
 #endif // ESP_PLATFORM
 
 #endif /* PINMAP_H */

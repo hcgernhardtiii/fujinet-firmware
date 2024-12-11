@@ -5,6 +5,7 @@
 #include <queue>
 // #include <driver/gpio.h>
 #include <driver/gpio.h>
+#include <soc/lldesc.h>
 #include <esp_idf_version.h>
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 #include <hal/gpio_ll.h>
@@ -31,6 +32,43 @@ extern volatile int isrctr;
 
 #define COMMAND_PACKET_LEN  27 //28     - max length changes suggested by robj
 // to do - make block packet compatible up to 767 data bytes?
+
+#define IWM_BIT(pin) ({						  \
+      uint32_t _pin = pin;					  \
+      (_pin >= 32 ? GPIO.in1.val : GPIO.in) & (1 << (_pin % 32)); \
+    })
+#define IWM_BIT_CLEAR(pin) ({			\
+      uint32_t _pin = pin;			\
+      uint32_t _mask = 1 << (_pin % 32);	\
+      if (_pin >= 32)				\
+	GPIO.out1_w1tc.val = _mask;		\
+      else					\
+	GPIO.out_w1tc = _mask;			\
+    })
+#define IWM_BIT_SET(pin) ({			\
+      uint32_t _pin = pin;			\
+      uint32_t _mask = 1 << (_pin % 32);	\
+      if (_pin >= 32)				\
+	GPIO.out1_w1ts.val = _mask;		\
+      else					\
+	GPIO.out_w1ts = _mask;			\
+    })
+#define IWM_BIT_INPUT(pin) ({			\
+      uint32_t _pin = pin;			\
+      uint32_t _mask = 1 << (_pin % 32);	\
+      if (_pin >= 32)				\
+	GPIO.enable1_w1tc.val = _mask;		\
+      else					\
+	GPIO.enable_w1tc = _mask;		\
+    })
+#define IWM_BIT_OUTPUT(pin) ({			\
+      uint32_t _pin = pin;			\
+      uint32_t _mask = 1 << (_pin % 32);	\
+      if (_pin >= 32)				\
+	GPIO.enable1_w1ts.val = _mask;		\
+      else					\
+	GPIO.enable_w1ts = _mask;		\
+    })
 
 union cmdPacket_t
 {
@@ -112,9 +150,9 @@ enum class sp_cmd_state_t
 extern volatile sp_cmd_state_t sp_command_mode;
 
 /** ACK and REQ
- * 
+ *
  * SmartPort ACK and REQ lines are used in a return-to-zero 4-phase handshake sequence.
- * 
+ *
  * how ACK works, my interpretation of the iigs firmware reference.
  * ACK is normally high-Z (deasserted) when device is ready to receive commands.
  * host will send (assert) REQ high to make a request and send a command.
@@ -122,70 +160,69 @@ extern volatile sp_cmd_state_t sp_command_mode;
  * host completes command handshake by sending REQ low (deassert).
  * device signals its ready for the next step (receive/send/status)
  * by sending ACK back high (deassert).
- * 
+ *
  * The sequence is:
- * 
+ *
  * step   REQ         ACK               smartport state
  * 0      deassert    deassert          idle
  * 1      assert      deassert          enabled, apple ii sending command or data to peripheral
  * 2      assert      assert            peripheral acknowledges it received data
  * 3      deassert    assert            apple ii does it's part to return to idle, peripheral is processing command or data
  * 0      deassert    deassert          peripheral returns to idle when it's ready for another command
- * 
+ *
  * Electrically, how ACK works with multiple devices on bus:
  * ACK is normally high-Z (pulled up?)
  * when a device receives a command addressed to it, and it is ready
  * to respond, it'll send ACK low. (To me, this seems like a perfect
  * scenario for open collector output but I think it's a 3-state line)
- * 
+ *
  * possible circuits:
  * Disk II physical interface - ACK uses the WPROT line, which is a tri-state ls125 buffer on the
- * Disk II analog card. There's no pull up/down/load resistor. This line drives the /SR input of the 
- * ls323 on the bus interface card. I surmise that WPROT goes low or is hi-z, which doesn't 
- * reset the ls125.  
+ * Disk II analog card. There's no pull up/down/load resistor. This line drives the /SR input of the
+ * ls323 on the bus interface card. I surmise that WPROT goes low or is hi-z, which doesn't
+ * reset the ls125.
  */
 
 class iwm_ll
 {
 protected:
+  // SPI receiver
+  spi_transaction_t rxtrans;
+
   // low level bit-banging i/o functions
-  bool iwm_req_val() { return (GPIO.in1.val & (0x01 << (SP_REQ-32))); };
+  bool iwm_req_val() { return (IWM_BIT(SP_REQ)); };
   void iwm_extra_set();
   void iwm_extra_clr();
   void disable_output();
   void enable_output();
-  
+
 public:
   void setup_gpio();
+  uint8_t iwm_decode_byte(uint8_t *src, size_t src_size, unsigned int sample_frequency,
+			  int timeout, size_t *bit_offset, bool *more_avail);
+  size_t iwm_decode_buffer(uint8_t *src, size_t src_size, unsigned int sample_frequency,
+			   int timeout, uint8_t *dest, size_t *used);
 };
 
 class iwm_sp_ll : public iwm_ll
 {
-private:  
+private:
   void set_output_to_spi();
 
   // SPI data handling
   uint8_t *spi_buffer = nullptr; //[8 * (BLOCK_PACKET_LEN+2)]; //smartport packet buffer
-  uint16_t spi_len = 0;
-  spi_bus_config_t bus_cfg;
   spi_device_handle_t spi;
-  // SPI receiver
-  spi_transaction_t rxtrans;
-  spi_device_handle_t spirx;
-  /** SPI data clock 
+
+public:
+  /** SPI data clock
    * N  Clock MHz   /8 Bit rate (kHz)    Bit/Byte period (us)
-   * 39	2.051282051	256.4102564	        3.9	31.2          256410 is only 0.3% faster than 255682
-   * 40	2	          250.	                4.0	32
-   * 41	1.951219512	243.902439	          4.1	32.8
+   * 39 2.051282051     256.4102564             3.9     31.2          256410 is only 0.3% faster than 255682
+   * 40 2                 250.                  4.0     32
+   * 41 1.951219512     243.902439                4.1   32.8
   **/
   // const int f_spirx = APB_CLK_FREQ / 39; // 2051282 Hz or 2052kHz or 2.052 MHz - works for NTSC but ...
   const int f_spirx = APB_CLK_FREQ / 40; // 2 MHz - need slower rate for PAL
-  const int pulsewidth = 8; // 8 samples per bit
-  const int halfwidth = pulsewidth / 2;
-
-  // SPI receiver data stream counters
-  int spirx_byte_ctr = 0;
-  int spirx_bit_ctr = 0;
+  spi_device_handle_t spirx;
 
   //uint8_t packet_buffer[BLOCK_PACKET_LEN]; //smartport packet buffer
   uint16_t packet_len = 0;
@@ -193,18 +230,17 @@ private:
 public:
   SemaphoreHandle_t spiMutex;
   // Phase lines and ACK handshaking
-  void iwm_ack_set() { GPIO.enable_w1tc = ((uint32_t)0x01 << SP_ACK); }; // disable the line so it goes hi-z
-  void iwm_ack_clr() { GPIO.enable_w1ts = ((uint32_t)0x01 << SP_ACK); };  // enable the line already set to low
+  void iwm_ack_set() { IWM_BIT_INPUT(SP_ACK); }; // disable the line so it goes hi-z
+  void iwm_ack_clr() { IWM_BIT_OUTPUT(SP_ACK); };  // enable the line already set to low
   bool req_wait_for_falling_timeout(int t);
   bool req_wait_for_rising_timeout(int t);
-  uint8_t iwm_phase_vector() { return (uint8_t)(GPIO.in1.val & (uint32_t)0b1111); };
+  uint8_t iwm_phase_vector() { return IWM_PHASE_COMBINE(); };
 
   // Smartport Bus handling by SPI interface
-  void encode_spi_packet();
+  int encode_spi_packet();
   int iwm_send_packet_spi();
-  bool spirx_get_next_sample();
-  int iwm_read_packet_spi(uint8_t *buffer, int n);
-  int iwm_read_packet_spi(int n);
+  int iwm_read_packet_spi(uint8_t *buffer, int packet_len);
+  int iwm_read_packet_spi(int packet_len);
   void spi_end();
 
   size_t decode_data_packet(uint8_t* input_data, uint8_t* output_data); //decode smartport data packet
@@ -222,7 +258,7 @@ public:
 
   // hardware configuration setup
   void setup_spi();
-  
+
 };
 
 // TO DO - enable/disable output
@@ -238,7 +274,7 @@ private:
   fn_rmt_config_t config;
 
   // track bit information
-  uint8_t* track_buffer = nullptr; // 
+  uint8_t* track_buffer = nullptr; //
   size_t track_numbits = 6400 * 8;
   size_t track_numbytes = 6400;
   size_t track_location = 0;
@@ -248,14 +284,25 @@ private:
 
   bool enabledD2 = true;
 
+  // write state
+  bool d2w_writing = false, d2w_started = false;
+  uint8_t *d2w_buffer;
+  lldesc_t *d2w_desc;
+  size_t d2w_buflen, d2w_begin;
+  size_t d2w_position;
+
 public:
+  QueueHandle_t iwm_write_queue;
+  uint8_t d2_enable_seen = 0;
+
   // Phase lines and ACK handshaking
   uint8_t iwm_phase_vector() { return (uint8_t)(GPIO.in1.val & (uint32_t)0b1111); };
   uint8_t iwm_enable_states();
 
   // Disk II handling by RMT peripheral
   void setup_rmt(); // install the RMT device
-  void start(uint8_t drive);
+  void diskii_write_handler();
+  void start(uint8_t drive, bool write_protect);
   void stop();
   // need a function to remove the RMT device?
 
@@ -272,6 +319,15 @@ public:
 
 extern iwm_sp_ll smartport;
 extern iwm_diskii_ll diskii_xface;
+
+typedef struct {
+  int quarter_track;
+  size_t track_begin, track_end, track_numbits;
+  uint8_t *buffer;
+  size_t length;
+} iwm_write_data;
+
+#define D2W_CHUNK_SIZE 128
 
 #endif // IWM_LL_H
 #endif // BUILD_APPLE

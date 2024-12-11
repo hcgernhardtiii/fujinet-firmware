@@ -367,7 +367,7 @@ void SystemManager::delay_microseconds(uint32_t us)
             LARGE_INTEGER freq;
             if (!QueryPerformanceFrequency (&freq))
             {
-                Debug_println("QueryPerformanceCounter failed");
+                Debug_println("QueryPerformanceFrequency failed");
                 // Cannot use QueryPerformanceCounter.
                 Sleep (us / 1000);
                 return;
@@ -1218,12 +1218,14 @@ void SystemManager::check_hardware_ver()
     a2no3state = true;
     Debug_printf("FujiApple NO3STATE force enabled\r\n");
 #   endif
+    setup_card_detect((gpio_num_t)PIN_CARD_DETECT); // enable SD card detect
 #elif defined(BUILD_MAC)
 /*  Mac 68k
     Only Rev0
 */
     _hardware_version = 1;
     safe_reset_gpio = PIN_BUTTON_C;
+    setup_card_detect((gpio_num_t)PIN_CARD_DETECT); // enable SD card detect
 #elif defined(BUILD_IEC)
     /*  Commodore
     */
@@ -1240,6 +1242,7 @@ void SystemManager::check_hardware_ver()
     /* No Safe Reset */
     _hardware_version = 3;
 #   endif
+    setup_card_detect((gpio_num_t)PIN_CARD_DETECT); // enable SD card detect
 #elif defined(BUILD_LYNX)
     /* Atari Lynx
     */
@@ -1249,11 +1252,13 @@ void SystemManager::check_hardware_ver()
     _hardware_version = 1;
     safe_reset_gpio = PIN_BUTTON_C;
 #   endif
+    setup_card_detect((gpio_num_t)PIN_CARD_DETECT); // enable SD card detect
 #elif defined(BUILD_RS232)
     /* RS232
     */
     _hardware_version = 1;
     safe_reset_gpio = PIN_BUTTON_C;
+    setup_card_detect((gpio_num_t)PIN_CARD_DETECT); // enable SD card detect
 #elif defined(BUILD_RC2014)
     /* RC2014
     */
@@ -1264,6 +1269,7 @@ void SystemManager::check_hardware_ver()
     */
     _hardware_version = 1;
     safe_reset_gpio = PIN_BUTTON_C;
+    setup_card_detect((gpio_num_t)PIN_CARD_DETECT); // enable SD card detect
 #endif /* BUILD_COCO */
 
 #else

@@ -4,6 +4,7 @@
 
 #ifdef ESP_PLATFORM
 #include <driver/ledc.h>
+#include "../../../include/PSRAMAllocator.h"
 #endif
 
 #include <cstdint>
@@ -13,11 +14,11 @@
 #include <libgen.h>
 #endif
 #include <map>
+#include <new>
 #include <vector>
 #include "compat_string.h"
 
 #include "../../../include/debug.h"
-#include "../../../include/PSRAMAllocator.h"
 
 #include "fnSystem.h"
 #include "fnConfig.h"
@@ -36,8 +37,11 @@
 
 sioFuji theFuji; // global fuji device object
 
-// sioDisk sioDiskDevs[MAX_HOSTS];
-sioNetwork *sioNetDevs[MAX_NETWORK_DEVICES];
+#ifdef ESP_PLATFORM
+std::unique_ptr<sioNetwork, PSRAMDeleter<sioNetwork>> sioNetDevs[MAX_NETWORK_DEVICES];
+#else
+std::unique_ptr<sioNetwork> sioNetDevs[MAX_NETWORK_DEVICES];
+#endif
 
 bool _validate_host_slot(uint8_t slot, const char *dmsg = nullptr);
 bool _validate_device_slot(uint8_t slot, const char *dmsg = nullptr);
@@ -129,20 +133,29 @@ sioFuji::sioFuji()
     for (int i = 0; i < MAX_HOSTS; i++)
         _fnHosts[i].slotid = i;
 
+#ifdef ESP_PLATFORM
+    for (int i = 0; i < MAX_NETWORK_DEVICES; ++i)
+    {
+        PSRAMAllocator<sioNetwork> allocator;
+        sioNetwork* ptr = allocator.allocate(1); // Allocate memory for one sioNetwork object
+
+        if (ptr != nullptr)
+        {
+            new (ptr) sioNetwork(); // Construct the object using placement new
+            sioNetDevs[i] = std::unique_ptr<sioNetwork, PSRAMDeleter<sioNetwork>>(ptr); // Store in smart pointer
+        }
+    }
+#else
     for (int i = 0; i < MAX_NETWORK_DEVICES; i++)
     {
-        void *p = heap_caps_malloc(sizeof(sioNetwork), MALLOC_CAP_DEFAULT);
-        sioNetDevs[i] = new(p) sioNetwork();
+        sioNetwork *ptr = (sioNetwork *) malloc(sizeof(sioNetwork));
+        if (ptr != nullptr) {
+            new (ptr) sioNetwork();
+            sioNetDevs[i] = std::unique_ptr<sioNetwork>(ptr);
+        }
     }
-}
+#endif
 
-sioFuji::~sioFuji()
-{
-    for (int i=0; i < MAX_NETWORK_DEVICES; i++)
-    {
-        if (sioNetDevs[i] != nullptr)
-            delete sioNetDevs[i];
-    }
 }
 
 // Status
@@ -2155,9 +2168,7 @@ void sioFuji::setup(systemBus *siobus)
         _sio_bus->addDevice(&_fnDisks[i].disk_dev, SIO_DEVICEID_DISK + i);
 
     for (int i = 0; i < MAX_NETWORK_DEVICES; i++)
-    {
-        _sio_bus->addDevice(sioNetDevs[i], SIO_DEVICEID_FN_NETWORK + i);
-    }
+        _sio_bus->addDevice(sioNetDevs[i].get(), SIO_DEVICEID_FN_NETWORK + i);
 
     _sio_bus->addDevice(&_cassetteDev, SIO_DEVICEID_CASSETTE);
     cassette()->set_buttons(Config.get_cassette_buttons());
@@ -2259,6 +2270,12 @@ void sioFuji::sio_base64_encode_output()
     base64.base64_buffer.shrink_to_fit();
 
     bus_to_computer(p.data(), len, false);
+}
+
+void sioFuji::sio_random_number()
+{
+    int r = rand();
+    bus_to_computer((uint8_t *)&r,sizeof(int),true);
 }
 
 void sioFuji::sio_base64_decode_input()
@@ -2634,6 +2651,10 @@ void sioFuji::sio_process(uint32_t commanddata, uint8_t checksum)
     case FUJICMD_HASH_CLEAR:
         sio_ack();
         sio_hash_clear();
+        break;
+    case FUJICMD_RANDOM_NUMBER:
+        sio_ack();
+        sio_random_number();
         break;
     default:
         sio_nak();

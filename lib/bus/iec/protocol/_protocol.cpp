@@ -9,158 +9,50 @@
 
 using namespace Protocol;
 
-
-/**
- * Callback function to set timeout 
- */
-static void onTimer(void *arg)
+int IRAM_ATTR IECProtocol::waitForSignals(int pin1, int state1,
+					  int pin2, int state2,
+					  int timeout)
 {
-    IECProtocol *p = (IECProtocol *)arg;
-    p->timer_timedout = true;
-    //IEC.release( PIN_IEC_SRQ );
-}
+  uint64_t start, now, elapsed;
+  int abort = 0;
 
-IECProtocol::IECProtocol() {
-    esp_timer_create_args_t args = {
-        .callback = onTimer,
-        .arg = this,
-        .name = nullptr
-    };
-    esp_timer_create(&args, &timer_handle);
-};
+  start = esp_timer_get_time();
+  for (;;) {
+    if (IEC_IS_ASSERTED(pin1) == state1)
+      break;
+    if (pin2 && IEC_IS_ASSERTED(pin2) == state2)
+      break;
 
-IECProtocol::~IECProtocol() {
-    esp_timer_stop(timer_handle);
-    esp_timer_delete(timer_handle);
-};
-
-/**
- * Start the timeout timer
- */
-void IECProtocol::timer_start(uint64_t timeout_us)
-{
-    timer_timedout = false;
-    esp_timer_stop(timer_handle);
-    esp_timer_start_once(timer_handle, timeout_us);
-    //IEC.pull( PIN_IEC_SRQ );
-}
-void IECProtocol::timer_stop()
-{
-    esp_timer_stop(timer_handle);
-    //IEC.release( PIN_IEC_SRQ );
-}
-
-
-int16_t IRAM_ATTR IECProtocol::timeoutWait(uint8_t pin, bool target_status, size_t wait_us, bool watch_atn)
-{
-    uint64_t start = 0;
-    uint64_t current = 0;
-    uint64_t elapsed = 0;
-    bool atn_status = false;
-
-#ifndef IEC_SPLIT_LINES
-    IEC.release ( pin );
-#endif
-
-    // Quick check to see if the target status is already set
-    if ( IEC.status ( pin ) == target_status )
-        return elapsed;
-
-    if ( pin == PIN_IEC_ATN )
-    {
-        watch_atn = false;
+    now = esp_timer_get_time();
+    elapsed = now - start;
+    if (elapsed >= timeout) {
+      abort = 1;
+      break;
     }
-    else
-    {
-#ifndef IEC_SPLIT_LINES
-        IEC.release ( PIN_IEC_ATN );
-#endif
+  }
 
-        // Sample ATN and set flag to indicate COMMAND or DATA mode
-        atn_status = IEC.status ( PIN_IEC_ATN );
-        //if ( atn_status ) IEC.flags |= ATN_PULLED;
-    }
-
-    //IEC.pull ( PIN_IEC_SRQ );
-    start = esp_timer_get_time();
-    while ( IEC.status ( pin ) != target_status )
-    {
-        current = esp_timer_get_time();
-        elapsed = ( current - start );
-
-        if ( elapsed >= wait_us && wait_us != FOREVER )
-        {
-            //IEC.release ( PIN_IEC_SRQ );
-            if ( wait_us == TIMEOUT_DEFAULT )
-                return -1;
-            
-            return wait_us;
-        }
-
-        if ( watch_atn )
-        {
-            bool atn_check = IEC.status ( PIN_IEC_ATN );
-            if ( atn_check != atn_status )
-            {
-                //IEC.release ( PIN_IEC_SRQ );
-                //Debug_printv("pin[%d] state[%d] wait[%d] elapsed[%d]", pin, target_status, wait, elapsed);
-                return -1;
-            }
-        }
-
-        if ( IEC.state < BUS_ACTIVE || elapsed > FOREVER )
-        {
-            // Something is messed up.  Get outta here.
-            Debug_printv("wth? bus_state[%d]", IEC.state);
-            Debug_printv("pin[%d] target_status[%d] wait[%d] elapsed[%d]", pin, target_status, wait_us, elapsed);
-            return -1;
-        }
-    }
-    //IEC.release ( PIN_IEC_SRQ );
-
-    // Debug_printv("pin[%d] state[%d] wait[%d] step[%d] t[%d]", pin, target_status, wait, elapsed);
-    return elapsed;
+  return abort ? TIMED_OUT : 0;
 }
 
-bool IRAM_ATTR IECProtocol::wait(size_t wait_us, bool watch_atn)
+void IECProtocol::transferDelaySinceLast(size_t minimumDelay)
 {
-    return wait(wait_us, 0, watch_atn);
-}
+  uint64_t now, elapsed;
+  int64_t remaining;
 
-bool IRAM_ATTR IECProtocol::wait(size_t wait_us, uint64_t start, bool watch_atn)
-{
-    uint64_t current, elapsed;
-    current = 0;
-    elapsed = 0;
 
-    if ( wait_us == 0 ) return true;
-    wait_us--; // Shave 1us for overhead
-
-    // Sample ATN and set flag to indicate SELECT or DATA mode
-    bool atn_status = IEC.status ( PIN_IEC_ATN );
-//    if ( atn_status ) IEC.flags |= ATN_PULLED;
-
-    //IEC.pull ( PIN_IEC_SRQ );
-    if ( start == 0 ) start = esp_timer_get_time();
-    while ( elapsed <= wait_us )
-    {
-        current = esp_timer_get_time();
-        elapsed = current - start;
-
-        if ( watch_atn )
-        {
-            bool atn_check = IEC.status ( PIN_IEC_ATN );
-            if ( atn_check != atn_status )
-            {
-                //IEC.release ( PIN_IEC_SRQ );
-                //Debug_printv("wait[%d] elapsed[%d] start[%d] current[%d]", wait, elapsed, start, current);
-                return false;
-            }
-        }
+  now = esp_timer_get_time();
+  elapsed = now - _transferEnded;
+  if (minimumDelay > 0) {
+    remaining = minimumDelay;
+    remaining -= elapsed;
+    if (remaining > 0) {
+      usleep(remaining);
+      now = esp_timer_get_time();
     }
-    //IEC.release ( PIN_IEC_SRQ );
+  }
 
-    return true;
+  _transferEnded = now;
+  return;
 }
 
 #endif /* BUILD_IEC */

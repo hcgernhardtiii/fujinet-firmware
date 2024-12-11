@@ -27,82 +27,13 @@ public:
         has_subdirs = false;
     }
 
-    // MStream methods
-    bool open() override;
-    void close() override;
-
     ~MMediaStream() {
         //Debug_printv("close");
         close();
     }
 
-    // Browsable streams might call seekNextEntry to skip current bytes
-    bool isBrowsable() override { return false; };
-    // Random access streams might call seekPath to jump to a specific file
-    bool isRandomAccess() override { return true; };
+    std::string url;
 
-    // read = (size) => this.containerStream.read(size);
-    virtual uint8_t read() {
-        uint8_t b = 0;
-        containerStream->read( &b, 1 );
-        _position++;
-        return b;
-    }
-    // readUntil = (delimiter = 0x00) => this.containerStream.readUntil(delimiter);
-    virtual std::string readUntil( uint8_t delimiter = 0x00 )
-    {
-        uint8_t b = 0, r = 0;
-        std::string bytes = "";
-        do
-        {
-            r = containerStream->read( &b, 1 );
-            if ( b != delimiter )
-            {
-                bytes += b;
-                _position++;
-            }
-            else
-                break;
-        } while ( r );
-
-        return bytes;
-    }
-    // readString = (size) => this.containerStream.readString(size);
-    virtual std::string readString( uint8_t size )
-    {
-        uint8_t b[size];
-        if ( auto s = containerStream->read( b, size ) )
-        {
-            _position += s;
-            return std::string((char *)b);
-        }
-        return std::string();
-    }
-    // readStringUntil = (delimiter = 0x00) => this.containerStream.readStringUntil(delimiter);
-    virtual std::string readStringUntil( uint8_t delimiter = '\0' )
-    {
-        uint8_t b[1];
-        std::stringstream ss;
-        while( containerStream->read( b, 1 ) )
-        {
-            if ( b[0] == delimiter )
-                ss << b;
-        }
-        return ss.str();
-    }
-
-    // seek = (offset) => this.containerStream.seek(offset + this.media_header_size);
-    bool seek(uint32_t offset) override { return containerStream->seek(offset + media_header_size); }
-    // seekCurrent = (offset) => this.containerStream.seekCurrent(offset);
-    bool seekCurrent(uint32_t offset) { return containerStream->seek(offset); }
-
-    bool seekPath(std::string path) override { return false; };
-    std::string seekNextEntry() override { return ""; };
-
-    virtual uint32_t seekFileSize( uint8_t start_track, uint8_t start_sector );
-
-    uint32_t read(uint8_t* buf, uint32_t size) override;
-    uint32_t write(const uint8_t *buf, uint32_t size) override;
     void reset() override {
         seekCalled = false;
         _position = 0;
@@ -110,8 +41,39 @@ public:
         //m_load_address = {0, 0};
     }
 
+    // MStream methods
     bool isOpen() override;
-    std::string url;
+
+    // Browsable streams might call seekNextEntry to skip current bytes
+    bool isBrowsable() override { return false; };
+    // Random access streams might call seekPath to jump to a specific file
+    bool isRandomAccess() override { return true; };
+
+    bool open(std::ios_base::openmode mode) override;
+    void close() override;
+
+    uint32_t read(uint8_t* buf, uint32_t size) override;
+    // read = (size) => this.containerStream.read(size);
+    virtual uint8_t read();
+    // readUntil = (delimiter = 0x00) => this.containerStream.readUntil(delimiter);
+    virtual std::string readUntil( uint8_t delimiter = 0x00 );
+    // readString = (size) => this.containerStream.readString(size);
+    virtual std::string readString( uint8_t size );
+    // readStringUntil = (delimiter = 0x00) => this.containerStream.readStringUntil(delimiter);
+    virtual std::string readStringUntil( uint8_t delimiter = '\0' );
+
+    virtual uint32_t write(const uint8_t *buf, uint32_t size);
+
+    // seek = (offset) => this.containerStream.seek(offset + this.media_header_size);
+    bool seek(uint32_t offset) override;
+    // seekCurrent = (offset) => this.containerStream.seekCurrent(offset);
+    bool seekCurrent(uint32_t offset);
+
+    bool seekPath(std::string path) override { return false; };
+    std::string seekNextEntry() override { return ""; };
+
+    virtual uint32_t seekFileSize( uint8_t start_track, uint8_t start_sector );
+
 
 protected:
 
@@ -151,8 +113,8 @@ protected:
     virtual bool seekEntry( std::string filename ) { return false; };
     virtual bool seekEntry( uint16_t index ) { return false; };
 
-    virtual uint16_t readContainer(uint8_t *buf, uint16_t size);
-    virtual uint16_t readFile(uint8_t* buf, uint16_t size) = 0;
+    virtual uint32_t readContainer(uint8_t *buf, uint32_t size);
+    virtual uint32_t readFile(uint8_t* buf, uint32_t size) = 0;
     virtual std::string decodeType(uint8_t file_type, bool show_hidden = false);
     virtual std::string decodeType(std::string file_type);
 
@@ -191,31 +153,40 @@ private:
  * Utility implementations
  ********************************************************/
 class ImageBroker {
-    static std::unordered_map<std::string, MMediaStream*> repo;
+    static std::unordered_map<std::string, MMediaStream*> image_repo;
 public:
-    template<class T> static T* obtain(std::string url) {
+    template<class T> static T* obtain(std::string url) 
+    {
+        //Debug_printv("streams[%d] url[%s]", image_repo.size(), url.c_str());
+
         // obviously you have to supply STREAMFILE.url to this function!
-        if(repo.find(url)!=repo.end()) {
-            return (T*)repo.at(url);
+        if(image_repo.find(url)!=image_repo.end()) {
+            return (T*)image_repo.at(url);
         }
 
         // create and add stream to broker if not found
         auto newFile = MFSOwner::File(url);
+
         T* newStream = (T*)newFile->getSourceStream();
 
-        // Are we at the root of the pathInStream?
-        if ( newFile->pathInStream == "")
+        if ( newStream != nullptr )
         {
-            Debug_printv("DIRECTORY [%s]", url.c_str());
-        }
-        else
-        {
-            Debug_printv("SINGLE FILE [%s]", url.c_str());
+            // Are we at the root of the pathInStream?
+            if ( newFile->pathInStream == "")
+            {
+                Debug_printv("DIRECTORY [%s]", url.c_str());
+            }
+            else
+            {
+                Debug_printv("SINGLE FILE [%s]", url.c_str());
+            }
+
+            image_repo.insert(std::make_pair(url, newStream));
+            return newStream;
         }
 
-        repo.insert(std::make_pair(url, newStream));
         delete newFile;
-        return newStream;
+        return nullptr;
     }
 
     static MMediaStream* obtain(std::string url) {
@@ -223,11 +194,16 @@ public:
     }
 
     static void dispose(std::string url) {
-        if(repo.find(url)!=repo.end()) {
-            auto toDelete = repo.at(url);
-            repo.erase(url);
+        if(image_repo.find(url)!=image_repo.end()) {
+            auto toDelete = image_repo.at(url);
+            image_repo.erase(url);
             delete toDelete;
         }
+        Debug_printv("streams[%d]", image_repo.size());
+    }
+
+    static void validate() {
+        
     }
 };
 

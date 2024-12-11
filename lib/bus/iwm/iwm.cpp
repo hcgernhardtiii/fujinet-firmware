@@ -73,17 +73,10 @@ void print_packet(uint8_t *data)
 #ifdef DEV_RELAY_SLIP
   for (int i = 0; i < COMMAND_LEN; i++)
     Debug_printf("%02x ", data[i]);
+  Debug_printf("\r\n");
 #else
-  Debug_printv("packet:\r\n%s\r\n", mstr::toHex(data, 16).c_str());
-  // for (int i = 0; i < 40; i++)
-  // {
-  //   if (data[i] != 0 || i == 0)
-  //     Debug_printf("%02x ", data[i]);
-  //   else
-  //     break;
-  // }
+  // Debug_printf("packet: %s\r\n", mstr::toHex(data, 16).c_str());
 #endif
-  // Debug_printf("\r\n");
 }
 
 void print_packet_wave(uint8_t *data, int bytes)
@@ -264,16 +257,12 @@ void iwmDevice::iwm_return_badcmd(iwm_decoded_cmd_t cmd)
   //Handle possible data packet to avoid crash extended and non-extended
   switch(cmd.command)
   {
-    case 0x42:
-    case 0x44:
-    case 0x49:
-    case 0x4a:
-    case 0x4b:
-    case 0x02:
-    case 0x04:
-    case 0x09:
-    case 0x0a:
-    case 0x0b:
+    case SP_ECMD_WRITEBLOCK:
+    case SP_ECMD_CONTROL:
+    case SP_ECMD_WRITE:
+    case SP_CMD_WRITEBLOCK:
+    case SP_CMD_CONTROL:
+    case SP_CMD_WRITE:
       data_len = 512;
       IWM.iwm_decode_data_packet((uint8_t *)data_buffer, data_len);
       Debug_printf("\r\nUnit %02x Bad Command with data packet %02x\r\n", id(), cmd.command);
@@ -285,7 +274,7 @@ void iwmDevice::iwm_return_badcmd(iwm_decoded_cmd_t cmd)
       return;
   }
 
-  if(cmd.command == 0x04) //Decode command control code
+  if(cmd.command == SP_CMD_CONTROL) //Decode command control code
   {
     send_reply_packet(SP_ERR_BADCTL); //we may be required to accept some control commands
                                       // but for now just report bad control if it's a control
@@ -304,16 +293,12 @@ void iwmDevice::iwm_return_device_offline(iwm_decoded_cmd_t cmd)
   //Handle possible data packet to avoid crash extended and non-extended
   switch(cmd.command)
   {
-    case 0x42:
-    case 0x44:
-    case 0x49:
-    case 0x4a:
-    case 0x4b:
-    case 0x02:
-    case 0x04:
-    case 0x09:
-    case 0x0a:
-    case 0x0b:
+    case SP_ECMD_WRITEBLOCK:
+    case SP_ECMD_CONTROL:
+    case SP_ECMD_WRITE:
+    case SP_CMD_WRITEBLOCK:
+    case SP_CMD_CONTROL:
+    case SP_CMD_WRITE:
       data_len = 512;
       IWM.iwm_decode_data_packet((uint8_t *)data_buffer, data_len);
       Debug_printf("\r\nUnit %02x Offline, Command with data packet %02x\r\n", id(), cmd.command);
@@ -325,7 +310,7 @@ void iwmDevice::iwm_return_device_offline(iwm_decoded_cmd_t cmd)
       return;
   }
 
-  if(cmd.command == 0x04) //Decode command control code
+  if(cmd.command == SP_CMD_CONTROL) //Decode command control code
   {
     send_reply_packet(SP_ERR_OFFLINE);
     uint8_t control_code = get_status_code(cmd);
@@ -351,21 +336,26 @@ void iwmDevice::iwm_return_noerror()
 void iwmDevice::iwm_status(iwm_decoded_cmd_t cmd) // override;
 {
   uint8_t status_code = cmd.params[2];
-  Debug_printf("\r\nTarget Device: %02x", id());
 
-  if (status_code == 0x03)
+  if (status_code == SP_CMD_FORMAT)
   {
-    Debug_printf("\r\nSending **DIB** Status");
+    Debug_printf("\r\nSending DIB Status for device 0x%02x", id());
     send_status_dib_reply_packet();
   }
   else
   {
-    Debug_printf("\r\nSending Device Status");
+    Debug_printf("\r\nSending Device Status for device 0x%02x", id());
     send_status_reply_packet();
   }
 }
 
 // Create a vector from the input for the various send_status_dib_reply_packet routines to call
+// data[0]                = status
+// data[1..1+block_size]  = block bytes - 3 bytes except in some unused code!! 
+// data[..1 byte ]        = name real size
+// data[..16 bytes ]      = name padded with spaces to 16 bytes
+// data[..2 bytes]        = device type
+// data[..2 byte]         = device version
 std::vector<uint8_t> iwmDevice::create_dib_reply_packet(const std::string& device_name, uint8_t status, const std::vector<uint8_t>& block_size, const std::array<uint8_t, 2>& type, const std::array<uint8_t, 2>& version)
 {
     std::vector<uint8_t> data;
@@ -381,6 +371,10 @@ std::vector<uint8_t> iwmDevice::create_dib_reply_packet(const std::string& devic
 
     data.insert(data.end(), type.begin(), type.end());
     data.insert(data.end(), version.begin(), version.end());
+
+    // std::string ddump = util_hexdump(data.data(), data.size());
+    // Debug_printv("DIB DATA");
+    // Debug_printf("%s\r\n", ddump.c_str());
 
     return data;
 }
@@ -438,12 +432,26 @@ std::vector<uint8_t> iwmDevice::create_dib_reply_packet(const std::string& devic
 //*****************************************************************************
 void IRAM_ATTR iwmBus::service()
 {
+#ifndef DEV_RELAY_SLIP
   // process smartport before diskII
+  if (!serviceSmartPort())
+    serviceDiskII();
+
+  serviceDiskIIWrite();
+#else
+  serviceSmartPort();
+#endif
+}
+
+// Returns true if SmartPort was handled
+bool IRAM_ATTR iwmBus::serviceSmartPort()
+{
   // read phase lines to check for smartport reset or enable
   switch (iwm_phases())
   {
   case iwm_phases_t::idle:
-    break;
+    return false;
+
   case iwm_phases_t::reset:
     Debug_printf("\r\nReset");
 
@@ -461,11 +469,12 @@ void IRAM_ATTR iwmBus::service()
 
     // if /EN35 is high, we must be on a host that supports 3.5 dumb drives
     // lets sample it here in case the host is not on when the FN is powered on/reset
-    (GPIO.in1.val & (0x01 << (SP_EN35 - 32))) ? en35Host = true : en35Host = false;
+    IWM_BIT(SP_EN35) ? en35Host = true : en35Host = false;
     Debug_printf("\r\nen35Host = %d",en35Host);
 #endif /* !SLIP */
 
     break;
+
   case iwm_phases_t::enable:
     // expect a command packet
     // should not ACK unless we know this is our Command
@@ -482,7 +491,7 @@ void IRAM_ATTR iwmBus::service()
     if (sp_command_mode != sp_cmd_state_t::command)
     {
       // iwm_ack_deassert(); // go hi-Z
-      return;
+      return true;
     }
 
     if ((command_packet.command & 0x7f) == 0x05)
@@ -491,7 +500,7 @@ void IRAM_ATTR iwmBus::service()
       if (iwm_req_deassert_timeout(50000))
       {
         // iwm_ack_deassert(); // go hi-Z
-        return;
+        return true;
       }
 
 #ifdef DEBUG
@@ -512,7 +521,7 @@ void IRAM_ATTR iwmBus::service()
           {
             Debug_printf("\nREQ timeout in command processing");
             iwm_ack_deassert(); // go hi-Z
-            return;
+            return true;
           }
 #ifndef DEV_RELAY_SLIP
           // need to take time here to service other ESP processes so they can catch up
@@ -538,21 +547,29 @@ void IRAM_ATTR iwmBus::service()
     iwm_ack_deassert(); // go hi-Z
   }                     // switch (phasestate)
 
+  return true;
+}
+
 #ifndef DEV_RELAY_SLIP
+// Returns true if Disk II was handled
+bool IRAM_ATTR iwmBus::serviceDiskII()
+{
   // check on the diskii status
   switch (iwm_drive_enabled())
   {
   case iwm_enable_state_t::off:
-    break;
+    return false;
+
   case iwm_enable_state_t::off2on:
     // need to start a counter and wait to turn on enable output after 1 ms only iff enable state is on
-    if (theFuji._fnDisk2s[diskii_xface.iwm_enable_states() - 1].device_active)
+    if (IWM_ACTIVE_DISK2->device_active)
     {
       fnSystem.delay(1); // need a better way to figure out persistence
       if (iwm_drive_enabled() == iwm_enable_state_t::on)
       {
-        theFuji._fnDisk2s[diskii_xface.iwm_enable_states() - 1].change_track(0); // copy current track in for this drive
-        diskii_xface.start(diskii_xface.iwm_enable_states() - 1); // start it up
+        IWM_ACTIVE_DISK2->change_track(0); // copy current track in for this drive
+        diskii_xface.start(diskii_xface.iwm_enable_states() - 1,
+                           IWM_ACTIVE_DISK2->readonly); // start it up
       }
     } // make a call to start the RMT stream
     else
@@ -561,27 +578,117 @@ void IRAM_ATTR iwmBus::service()
       // alternative approach is to enable RMT to spit out PRN bits
     }
     // make sure the state machine moves on to iwm_enable_state_t::on
-    return; // return so the SP code doesn't get checked
+    break;
+
   case iwm_enable_state_t::on:
+    diskii_xface.d2_enable_seen |= diskii_xface.iwm_enable_states();
 #ifdef DEBUG
-    new_track = theFuji._fnDisk2s[diskii_xface.iwm_enable_states() - 1].get_track_pos();
+    new_track = IWM_ACTIVE_DISK2->get_track_pos();
     if (old_track != new_track)
     {
       Debug_printf("\ntrk pos %03d on d%d", new_track, diskii_xface.iwm_enable_states());
       old_track = new_track;
     }
 #endif
-    return;
+    break;
+
   case iwm_enable_state_t::on2off:
     fnSystem.delay(1); // need a better way to figure out persistence
     diskii_xface.stop();
     iwm_ack_deassert();
-    return;
+    break;
   }
-#endif /* !SLIP */
+
+  return true;
 }
 
-#ifndef DEV_RELAY_SLIP
+// Returns true if a Disk II write was received
+bool IRAM_ATTR iwmBus::serviceDiskIIWrite()
+{
+  iwm_write_data item;
+  int sector_num;
+  uint8_t *decoded;
+  size_t decode_len;
+  size_t sector_start, sector_end;
+  bool found_start, found_end;
+  size_t bitlen, used;
+
+
+  if (!xQueueReceive(diskii_xface.iwm_write_queue, &item, 0))
+    return false;
+
+  Debug_printf("\r\nDisk II iwm queue receive %u %u %u %u",
+	       item.length, item.track_begin, item.track_end, item.track_numbits);
+  // gap 1            = 16 * 10
+  // sector header    = 10 * 8          [D5 AA 96] + 4 + [DE AA EB]
+  // gap 2            = 7 * 10
+  // sector data      = (6 + 343) * 8   [D5 AA AD] + 343 + [DE AA EB]
+  // gap 3            = 16 * 10
+  // per sector bits  = 3102
+
+  // Take advantage of fixed sector positions of mediaTypeDSK serialise_track()
+  // (as listed above)
+  sector_num = (item.track_begin - 16 * 10) / 3102;
+
+  bitlen = (item.track_end + item.track_numbits - item.track_begin) % item.track_numbits;
+  Debug_printf("\r\nDisk II write Qtrack/sector: %i/%i  bit_len: %i",
+	       item.quarter_track, sector_num, bitlen);
+  decoded = (uint8_t *) malloc(item.length);
+  decode_len = diskii_xface.iwm_decode_buffer(item.buffer, item.length,
+					      smartport.f_spirx, D2W_CHUNK_SIZE * 2 * 8,
+					      decoded, &used);
+  Debug_printf("\r\nDisk II used: %u", used);
+
+  // Find start of sector: D5 AA AD
+  for (sector_start = 0; sector_start <= decode_len - 349; sector_start++)
+    if (decoded[sector_start]      == 0xD5
+	&& decoded[sector_start+1] == 0xAA
+	&& decoded[sector_start+2] == 0xAD)
+      break;
+  found_start = sector_start <= decode_len - 349;
+
+  // Find end of sector too: DE AA EB
+  for (sector_end = 0; sector_end <= decode_len - 3; sector_end++)
+    if (decoded[sector_end]      == 0xDE
+	&& decoded[sector_end+1] == 0xAA
+	&& decoded[sector_end+2] == 0xEB)
+      break;
+  found_end = sector_end <= decode_len - 3;
+
+  if (!found_start && found_end) {
+    Debug_printf("\r\nDisk II no prologue found");
+#if 0
+    sector_start = sector_end - 346;
+    found_start = true;
+#endif
+  }
+
+  if (found_start && found_end && sector_end - sector_start == 346) {
+    uint8_t sector_data[343]; // Need enough room to demap and de-xor
+    uint16_t checksum;
+
+
+    Debug_printf("\r\nDisk II sector data: %i", sector_start + 3);
+    checksum = decode_6_and_2(sector_data, &decoded[sector_start + 3]);
+    if ((checksum >> 8) != (checksum & 0xff))
+      Debug_printf("\r\nDisk II checksum mismatch: %04x", checksum);
+
+    iwmDisk2 *disk_dev = IWM_ACTIVE_DISK2;
+    disk_dev->write_sector(item.quarter_track, sector_num, sector_data);
+    disk_dev->change_track(0);
+  }
+  else {
+    Debug_printf("\r\nDisk II sector not found");
+  }
+
+  // FIXME - is there another sector to decode?
+
+  free(decoded);
+  free(item.buffer);
+
+  return true;
+}
+
 iwm_enable_state_t IRAM_ATTR iwmBus::iwm_drive_enabled()
 {
   uint8_t phases = smartport.iwm_phase_vector();
@@ -616,7 +723,7 @@ iwm_enable_state_t IRAM_ATTR iwmBus::iwm_drive_enabled()
     return iwm_enable_state_t::off;
   }
 }
-#endif /* !SLIP */
+#endif /* !DEV_RELAY_SLIP */
 
 void iwmBus::handle_init()
 {
@@ -630,11 +737,6 @@ void iwmBus::handle_init()
   // to do - get the next device in the daisy chain and assign ID
   for (auto it = _daisyChain.begin(); it != _daisyChain.end(); ++it)
   {
-    // tell the Fuji it's device no.
-    if (it == _daisyChain.begin())
-    {
-      theFuji._devnum = command_packet.dest;
-    }
     // assign dev numbers
     pDevice = (*it);
     pDevice->switched = false; //reset switched condition on init

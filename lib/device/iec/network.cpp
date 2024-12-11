@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "network.h"
+#include "../../include/cbm_defines.h"
 
 #include "../../include/debug.h"
 #include "../../hardware/led.h"
@@ -109,7 +110,7 @@ void iecNetwork::iec_open()
                    [](unsigned char c) { return std::toupper(c); });
 
     // Instantiate protocol based on the scheme
-    Debug_printv("Creating protocol for chema %s\r\n", channel_data.urlParser->scheme.c_str());
+    Debug_printv("Creating protocol for schema %s\r\n", channel_data.urlParser->scheme.c_str());
     channel_data.protocol = std::move(NetworkProtocolFactory::createProtocol(channel_data.urlParser->scheme, channel_data));
 
     if (!channel_data.protocol) {
@@ -261,6 +262,7 @@ void iecNetwork::iec_reopen_save()
         return;
     }
 
+#if 0
     while (!(IEC.flags & EOI_RECVD))
     {
         int16_t b = IEC.receiveByte();
@@ -273,6 +275,9 @@ void iecNetwork::iec_reopen_save()
 
         channel_data.transmitBuffer.push_back(b);
     }
+#else
+#warning FIXME - use payload
+#endif
 
     // force incoming data from HOST to fixed ascii
     // Debug_printv("[1] DATA: >%s< [%s]", channel_data.transmitBuffer.c_str(), mstr::toHex(channel_data.transmitBuffer).c_str());
@@ -311,7 +316,7 @@ void iecNetwork::iec_reopen_channel_listen()
     int channelId = commanddata.channel;
     auto& channel_data = network_data_map[channelId];
 
-    Debug_printv("channel[%2X]", channelId);
+    Debug_printv("channel[%02X]", channelId);
 
     if (!channel_data.protocol)
     {
@@ -322,6 +327,7 @@ void iecNetwork::iec_reopen_channel_listen()
 
     // Debug_printv("Receiving data from computer...\r\n");
 
+#if 0
     while (!(IEC.flags & EOI_RECVD))
     {
         int16_t b = IEC.receiveByte();
@@ -334,6 +340,9 @@ void iecNetwork::iec_reopen_channel_listen()
 
         channel_data.transmitBuffer.push_back(b);
     }
+#else
+#warning FIXME - use payload
+#endif
 
     // force incoming data from HOST to fixed ascii
     // Debug_printv("[1] DATA: >%s< [%s]", channel_data.transmitBuffer.c_str(), mstr::toHex(channel_data.transmitBuffer).c_str());
@@ -355,7 +364,7 @@ void iecNetwork::iec_reopen_channel_talk()
     bool set_eoi = false;
     NetworkStatus ns;
 
-    Debug_printv("channel[%2X]", channelId);
+    Debug_printv("channel[%02X]", channelId);
 
     // If protocol isn't connected, then return not connected.
     if (!channel_data.protocol)
@@ -394,18 +403,18 @@ void iecNetwork::iec_reopen_channel_talk()
             set_eoi = true;
         }
 
-        IEC.sendByte(b, set_eoi);
-
-        if ( IEC.flags & ERROR )
+        if (!IEC.sendByte(b, set_eoi))
         {
-            Debug_printv("TALK ERROR! flags[%d]\n", IEC.flags);
+	    //Debug_printv("TALK ERROR! flags[%d]\n", IEC.flags);
             return;
         }
 
-        if ( !(IEC.flags & ATN_PULLED) )
+#if 0
+        if ( !(IEC.flags & ATN_ASSERTED) )
             channel_data.receiveBuffer.erase(0, 1);
+#endif
 
-    } while( !(IEC.flags & ATN_PULLED) && !set_eoi );
+    } while( /*!(IEC.flags & ATN_ASSERTED) &&*/ !set_eoi );
 }
 
 void iecNetwork::set_login_password()
@@ -733,7 +742,7 @@ void iecNetwork::iec_command()
         return;
     }
 
-    Debug_printf("pt[0]=='%s'\n", pt[0].c_str());
+    Debug_printv("pt[0]=='%s'\n", pt[0].c_str());
     if (pt[0] == "cd")
         set_prefix();
     else if (pt[0] == "chmode")
@@ -789,13 +798,13 @@ void iecNetwork::iec_command()
                 return;
             }
 
-            Debug_printv("pt[0][0]=[%2X] pt[1]=[%d] aux1[%d] aux2[%d]", pt[0][0], channel, cmdFrame.aux1, cmdFrame.aux2);
-
-            if (channel_data.protocol->special_inquiry(pt[0][0]) == 0x00)
+            uint8_t m = channel_data.protocol->special_inquiry(pt[0][0]);
+            Debug_printv("pt[0][0]=[%2X] pt[1]=[%d] size[%d] m[%d]", pt[0][0], channel, pt.size(), m);
+            if (m == 0x00)
                 perform_special_00();
-            else if (channel_data.protocol->special_inquiry(pt[0][0]) == 0x40)
+            else if (m == 0x40)
                 perform_special_40();
-            else if (channel_data.protocol->special_inquiry(pt[0][0]) == 0x80)
+            else if (m == 0x80)
                 perform_special_80();
         }
     }
@@ -1266,6 +1275,33 @@ void iecNetwork::set_open_params()
 
 }
 
+#if 1
+device_state_t iecNetwork::openChannel(/*int chan, IECPayload &payload*/)
+{
+  process_channel();
+  return state;
+}
+
+device_state_t iecNetwork::closeChannel(/*int chan*/)
+{
+  return state;
+}
+
+device_state_t iecNetwork::readChannel(/*int chan*/)
+{
+  if (commanddata.channel == CHANNEL_COMMAND)
+    process_command();
+  else
+    process_load();
+  return state;
+}
+
+device_state_t iecNetwork::writeChannel(/*int chan, IECPayload &payload*/)
+{
+  process_save();
+  return state;
+}
+#else
 device_state_t iecNetwork::process()
 {
     // Call base class
@@ -1299,6 +1335,7 @@ device_state_t iecNetwork::process()
 
     return state;
 }
+#endif
 
 void iecNetwork::process_load()
 {

@@ -1,6 +1,6 @@
 // .D64, .D41 - 1541 disk image format
 //
-// https://vice-emu.sourceforge.io/vice_17.html#SEC345
+// https://vice-emu.sourceforge.io/vice_16.html#SEC408
 // https://ist.uwaterloo.ca/~schepers/formats/D64.TXT
 // https://ist.uwaterloo.ca/~schepers/formats/GEOS.TXT
 // https://www.lemon64.com/forum/viewtopic.php?t=70024&start=0 (File formats = Why is D64 not called D40/D41)
@@ -21,6 +21,7 @@
 
 #include "../meat_media.h"
 #include "string_utils.h"
+#include "utils.h"
 
 
 /********************************************************
@@ -87,7 +88,7 @@ public:
     bool error_info = false;
     std::string bam_message = "";
 
-    D64MStream(std::shared_ptr<MStream> is) : MMediaStream(is) 
+    D64MStream(std::shared_ptr<MStream> is) : MMediaStream(is)
     {
         // D64 Partition Info
         std::vector<BlockAllocationMap> b = { 
@@ -226,7 +227,7 @@ public:
             partitions[partition].header_sector, 
             partitions[partition].header_offset 
         );
-        containerStream->read((uint8_t*)&header, sizeof(header));
+        readContainer((uint8_t*)&header, sizeof(header));
     }
     uint16_t getSectorCount( uint16_t track )
     {
@@ -242,7 +243,7 @@ public:
     }
 
     virtual bool seekPath(std::string path) override;
-    uint16_t readFile(uint8_t* buf, uint16_t size) override;
+    uint32_t readFile(uint8_t* buf, uint32_t size) override;
 
     Header header;      // Directory header data
     Entry entry;        // Directory entry data

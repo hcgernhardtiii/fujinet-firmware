@@ -30,9 +30,8 @@ LOCAL_INI_VALUES_FILE="${SCRIPT_DIR}/platformio.local.ini"
 
 function display_board_names {
   while IFS= read -r piofile; do
-    BASE_NAME=$(basename $piofile)
-    BOARD_NAME=$(echo ${BASE_NAME//.ini} | cut -d\- -f2-)
-    echo "$(basename $piofile)"
+    BOARD_NAME=$(echo $(basename $piofile) | sed 's#^platformio-##;s#.ini$##')
+    echo "$BOARD_NAME"
   done < <(find "$SCRIPT_DIR/build-platforms" -name 'platformio-*.ini' -print | sort)
 }
 
@@ -76,6 +75,7 @@ function show_help {
   echo "    ./build.sh -cb        # for CLEAN + BUILD of current target in platformio-local.ini"
   echo "    ./build.sh -m         # View FujiNet Monitor"
   echo "    ./build.sh -cbum      # Clean/Build/Upload to FN/Monitor"
+  echo "    ./build.sh -f         # Upload filesystem"
   echo ""
   echo "Supported boards:"
   echo ""
@@ -152,7 +152,7 @@ if [ ! -z "$PC_TARGET" ] ; then
   if [ $DO_CLEAN -eq 1 ] ; then
     echo "Removing old build artifacts"
     rm -rf $SCRIPT_DIR/build/*
-    rm $SCRIPT_DIR/build/.ninja* 2>/dev/null
+    rm -f $SCRIPT_DIR/build/.ninja* 2>/dev/null
   fi
 
   cd $SCRIPT_DIR/build
@@ -161,6 +161,10 @@ if [ ! -z "$PC_TARGET" ] ; then
     cmake .. -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DFUJINET_TARGET=$PC_TARGET "$@"
   else
     cmake "$GEN_CMD" .. -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DFUJINET_TARGET=$PC_TARGET "$@"
+  fi
+  if [ $? -ne 0 ]; then
+    echo "cmake failed writing compile commands. Exiting"
+    exit 1
   fi
   # Run the specific build
   BUILD_TYPE="Release"
@@ -185,7 +189,7 @@ if [ ! -z "$PC_TARGET" ] ; then
   python -c "import importlib.util, sys; sys.exit(0 if all(importlib.util.find_spec(mod.strip()) for mod in '''$MOD_LIST'''.split()) else 1)"
   if [ $? -eq 1 ] ; then
     echo "At least one of the required python modules is missing"
-    sh ${SCRIPT_DIR}/install_python_modules.sh
+    bash ${SCRIPT_DIR}/install_python_modules.sh
   fi
 
   cmake --build .
@@ -303,6 +307,10 @@ AUTOCLEAN_ARG=""
 if [ ${AUTOCLEAN} -eq 0 ] ; then
   AUTOCLEAN_ARG="--disable-auto-clean"
 fi
+
+# any stage that fails from this point should stop the script immediately, as they are designed to run
+# on from each other sequentially as long as the previous passed.
+set -e
 
 if [ ${RUN_BUILD} -eq 1 ] ; then
   pio run -c $INI_FILE ${DEV_MODE_ARG} $ENV_ARG $TARGET_ARG $AUTOCLEAN_ARG 2>&1

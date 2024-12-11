@@ -22,15 +22,26 @@
 #include "fnFS.h"
 
 enum {
-  SP_CMD_STATUS	= 0x00,
-  SP_CMD_READBLOCK	= 0x01,
-  SP_CMD_WRITEBLOCK	= 0x02,
-  SP_CMD_FORMAT	= 0x03,
-  SP_CMD_CONTROL	= 0x04,
-  SP_CMD_OPEN	= 0x06,
-  SP_CMD_CLOSE	= 0x07,
-  SP_CMD_READ	= 0x08,
-  SP_CMD_WRITE	= 0x09,
+  SP_CMD_STATUS         = 0x00,
+  SP_CMD_READBLOCK      = 0x01,
+  SP_CMD_WRITEBLOCK     = 0x02,
+  SP_CMD_FORMAT         = 0x03,
+  SP_CMD_CONTROL        = 0x04,
+  SP_CMD_INIT           = 0x05,
+  SP_CMD_OPEN           = 0x06,
+  SP_CMD_CLOSE          = 0x07,
+  SP_CMD_READ           = 0x08,
+  SP_CMD_WRITE          = 0x09,
+  SP_ECMD_STATUS        = 0x40,
+  SP_ECMD_READBLOCK     = 0x41,
+  SP_ECMD_WRITEBLOCK    = 0x42,
+  SP_ECMD_FORMAT        = 0x43,
+  SP_ECMD_CONTROL       = 0x44,
+  SP_ECMD_INIT          = 0x45,
+  SP_ECMD_OPEN          = 0x46,
+  SP_ECMD_CLOSE         = 0x47,
+  SP_ECMD_READ          = 0x48,
+  SP_ECMD_WRITE         = 0x49,
 };
 
 // see page 81-82 in Apple IIc ROM reference and Table 7-5 in IIgs firmware ref
@@ -96,12 +107,14 @@ enum {
 #define IWM_CTRL_RUN_ROUTINE 0x05
 #define IWM_CTRL_DWNLD_ADDRESS 0x06
 #define IWM_CTRL_DOWNLOAD 0x07
+#define IWM_CTRL_CLEAR_ENSEEN 0x08
 
 #define IWM_STATUS_STATUS 0x00
 #define IWM_STATUS_DCB 0x01
 #define IWM_STATUS_NEWLINE 0x02
 #define IWM_STATUS_DIB 0x03
 #define IWM_STATUS_UNI35 0x05
+#define IWM_STATUS_ENSEEN 0x08
 
 // class def'ns
 class iwmFuji;     // declare here so can reference it, but define in fuji.h
@@ -320,6 +333,11 @@ public:
   // these things stay for the most part
   void setup();
   void service();
+  bool serviceSmartPort();
+  bool serviceDiskII();
+#ifndef DEV_RELAY_SLIP
+  bool serviceDiskIIWrite();
+#endif
   void shutdown();
 
   int numDevices();
@@ -340,5 +358,6 @@ public:
 
 extern iwmBus IWM;
 
+#define IWM_ACTIVE_DISK2 ((iwmDisk2 *) theFuji.get_disk_dev(MAX_SP_DEVICES + diskii_xface.iwm_enable_states() - 1))
 #endif // guard
 #endif /* BUILD_APPLE */

@@ -1,5 +1,7 @@
 #ifdef BUILD_COCO
 
+#include <queue>
+
 #include "drivewire.h"
 
 #include "../../include/debug.h"
@@ -31,6 +33,10 @@ static QueueHandle_t drivewire_evt_queue = NULL;
 #endif
 
 drivewireDload dload;
+
+// Host & client channel queues
+std::queue<char> outgoingChannel[16];
+std::queue<char> incomingChannel[16];
 
 #define DEBOUNCE_THRESHOLD_US 50000ULL
 
@@ -100,7 +106,7 @@ void systemBus::op_nop()
 void systemBus::op_reset()
 {
     Debug_printv("op_reset()");
-    
+
     // When a reset transaction occurs, set the mounted disk image to the CONFIG disk image.
     theFuji.boot_config = true;
     theFuji.insert_boot_device(Config.get_general_boot_mode());
@@ -124,7 +130,7 @@ void systemBus::op_readex()
 
     Debug_printf("OP_READ: DRIVE %3u - SECTOR %8lu\n", drive_num, lsn);
 
-    if (theFuji.boot_config)
+    if (theFuji.boot_config && drive_num == 0)
         d = theFuji.bootdisk();
     else
         d = &theFuji.get_disks(drive_num)->disk_dev;
@@ -283,7 +289,7 @@ void systemBus::op_net()
 
     // And pass control to it
     Debug_printf("OP_NET: %u\n",device_id);
-    _netDev[device_id]->process();    
+    _netDev[device_id]->process();
 }
 
 void systemBus::op_unhandled(uint8_t c)
@@ -318,27 +324,118 @@ void systemBus::op_init()
     Debug_printv("OP_INIT");
 }
 
+void systemBus::op_serinit()
+{
+    Debug_printv("OP_SERINIT");
+    fnDwCom.read();
+}
+
+void systemBus::op_serterm()
+{
+    Debug_printv("OP_SERTERM");
+    fnDwCom.read();
+}
+
 void systemBus::op_dwinit()
 {
     Debug_printv("OP_DWINIT - Sending feature byte 0x%02x", DWINIT_FEATURES);
+#define OS9 1
+#ifdef OS9
+    fnDwCom.write(0x04);
+#else
     fnDwCom.write(DWINIT_FEATURES);
+#endif    
 }
 
 void systemBus::op_getstat()
 {
-    Debug_printv("OP_GETSTAT: 0x%02x", fnDwCom.read());
+    Debug_printv("OP_GETSTAT: 0x%02x 0x%02x", fnDwCom.read(),fnDwCom.read());
 }
 
 void systemBus::op_setstat()
 {
-    Debug_printv("OP_SETSTAT: 0x%02x", fnDwCom.read());
+    Debug_printv("OP_SETSTAT: 0x%02x 0x%02x", fnDwCom.read(),fnDwCom.read());
+}
+
+void systemBus::op_sergetstat()
+{
+    unsigned char vchan = fnDwCom.read();
+    unsigned char code = fnDwCom.read();
+    Debug_printv("OP_SERGETSTAT: 0x%02x 0x%02x", vchan, code);
+}
+
+void systemBus::op_sersetstat()
+{
+    unsigned char vchan = fnDwCom.read();
+    unsigned char code = fnDwCom.read();
+    Debug_printv("OP_SERSETSTAT: 0x%02x 0x%02x", vchan, code);
+    if (code == 0x28) {
+        for (int i = 0; i < 26; i++) {
+            fnDwCom.read();
+        }
+    }
 }
 
 void systemBus::op_serread()
 {
-    // TODO: Temporary until modem and network are working
-    fnDwCom.write(0x00);
-    fnDwCom.write(0x00);
+    unsigned char vchan = 0;
+    unsigned char response = 0x00;
+
+    // scan client channels for first that has available data    
+    for (int i = 0; i < 16; i++) {
+        if (outgoingChannel[i].empty() == false) {
+            response = outgoingChannel[i].front();
+            outgoingChannel[i].pop();
+            vchan = i;
+            break;
+        }
+    }
+    
+    fnDwCom.write(vchan);
+    fnDwCom.write(response);
+
+    Debug_printv("OP_SERREAD: vchan $%02x - response $%02x\n", vchan, response);
+}
+
+void systemBus::op_serreadm()
+{
+    unsigned char vchan = fnDwCom.read();
+    unsigned char count = fnDwCom.read();
+    
+    // scan client channels for first that has available data    
+    for (vchan = 0; vchan < 16; vchan++) {
+        if (outgoingChannel[vchan].empty() == false) {
+            if (outgoingChannel[vchan].size() < count) count = outgoingChannel[vchan].size();
+            for (int i = 0; i < count; i++) {
+                int response = outgoingChannel[vchan].front();
+                outgoingChannel[vchan].pop();
+                fnDwCom.write(response);
+                Debug_printv("OP_SERREADM: vchan $%02x - response $%02x\n", vchan, response);
+            }
+            break;
+        }
+    }
+}
+
+void systemBus::op_serwrite()
+{
+    unsigned char vchan = fnDwCom.read();
+    unsigned char byte = fnDwCom.read();
+    incomingChannel[vchan].push(byte);
+    Debug_printv("OP_SERWRITE: vchan $%02x - byte $%02x\n", vchan, byte);
+}
+
+void systemBus::op_serwritem()
+{
+    unsigned char vchan = fnDwCom.read();
+    unsigned char byte = fnDwCom.read();
+    unsigned char count = fnDwCom.read();
+    
+    for (int i = 0; i < count; i++) {
+        int byte = fnDwCom.read();
+        incomingChannel[vchan].push(byte);
+        Debug_printv("OP_SERWRITE: vchan $%02x - byte $%02x\n", vchan, byte);
+    }
 }
 
 void systemBus::op_print()
@@ -358,64 +455,94 @@ void systemBus::_drivewire_process_cmd()
 
     fnLedManager.set(eLed::LED_BUS, true);
 
-    switch (c)
-    {
-    case OP_JEFF:
-        op_jeff();
-		break;
-	case OP_NOP:
-        op_nop();
-        break;
-    case OP_RESET1:
-    case OP_RESET2:
-    case OP_RESET3:
-        op_reset();
-        break;
-    case OP_READEX:
-        op_readex();
-        break;
-    case OP_WRITE:
-        op_write();
-        break;
-    case OP_TIME:
-        op_time();
-        break;
-    case OP_INIT:
-        op_init();
-        break;
-    case OP_DWINIT:
-        op_dwinit();
-        break;
-    case OP_SERREAD:
-        op_serread();
-        break;
-    case OP_PRINT:
-        op_print();
-        break;
-    case OP_PRINTFLUSH:
-        // Not needed.
-        break;
-        // case OP_GETSTAT:
-        //     op_getstat();
-        //     break;
-        // case OP_SETSTAT:
-        //     op_setstat();
-        //     break;
-
-    case OP_FUJI:
-        op_fuji();
-        break;
-    case OP_NET:
-        op_net();
-        break;
-    case OP_CPM:
-        op_cpm();
-        break;
-    default:
-        op_unhandled(c);
-        break;
+    if (c >= 0x80 && c <= 0x8F) {
+        // handle FASTWRITE here
+        int vchan = c & 0xF;
+        int byte = fnDwCom.read();
+        incomingChannel[vchan].push(byte);
+    } else {
+        switch (c)
+        {
+        case OP_JEFF:
+            op_jeff();
+		    break;
+	    case OP_NOP:
+            op_nop();
+            break;
+        case OP_RESET1:
+        case OP_RESET2:
+        case OP_RESET3:
+            op_reset();
+            break;
+        case OP_READEX:
+            op_readex();
+            break;
+        case OP_WRITE:
+            op_write();
+            break;
+        case OP_TIME:
+            op_time();
+            break;
+        case OP_INIT:
+            op_init();
+            break;
+        case OP_SERINIT:
+            op_serinit();
+            break;
+        case OP_DWINIT:
+            op_dwinit();
+            break;
+        case OP_SERREAD:
+            op_serread();
+            break;
+        case OP_SERREADM:
+            op_serreadm();
+            break;
+        case OP_SERWRITE:
+            op_serwrite();
+            break;
+        case OP_SERWRITEM:
+            op_serwritem();
+            break;
+        case OP_PRINT:
+            op_print();
+            break;
+        case OP_PRINTFLUSH:
+            // Not needed.
+            break;
+        case OP_GETSTAT:
+            op_getstat();
+            break;
+        case OP_SETSTAT:
+            op_setstat();
+            break;
+        case OP_SERGETSTAT:
+            op_sergetstat();
+            break;
+        case OP_SERSETSTAT:
+            op_sersetstat();
+            break;
+        case OP_TERM:
+            Debug_printf("OP_TERM!\n");
+            break;
+        case OP_SERTERM:
+            op_serterm();
+            break;
+        case OP_FUJI:
+            op_fuji();
+            break;
+        case OP_NET:
+            op_net();
+            break;
+        case OP_CPM:
+            op_cpm();
+            break;
+        default:
+            op_unhandled(c);
+            break;
+        }
     }
-
+    
     fnLedManager.set(eLed::LED_BUS, false);
 }
 
@@ -449,7 +576,7 @@ void systemBus::service()
     // check and assert interrupts if needed for any open
     // network device.
     if (!_netDev.empty())
-    {    
+    {
         for (auto it=_netDev.begin(); it != _netDev.end(); ++it)
         {
             it->second->poll_interrupt();
@@ -475,16 +602,26 @@ void systemBus::setup()
     // xTaskCreate(drivewire_intr_task, "drivewire_intr_task", 2048, NULL, 10, NULL);
     // xTaskCreatePinnedToCore(drivewire_intr_task, "drivewire_intr_task", 4096, this, 10, NULL, 0);
 
-    // Setup interrupt for cassette motor pin
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << PIN_CASS_MOTOR), // bit mask of the pins that you want to set
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+// Configure UART to RP2040
+#ifdef FORCE_UART_BAUD
+	Debug_printv("FORCE_UART_BAUD set to %u", FORCE_UART_BAUD);
+	_drivewireBaud = FORCE_UART_BAUD;
+#else
+	_drivewireBaud = 115200;
+#endif
+
+#else
+	// Setup interrupt for cassette motor pin
+	gpio_config_t io_conf = {
+		.pin_bit_mask = (1ULL << PIN_CASS_MOTOR), // bit mask of the pins that you want to set
         .mode = GPIO_MODE_INPUT,                  // set as input mode
         .pull_up_en = GPIO_PULLUP_DISABLE,        // disable pull-up mode
         .pull_down_en = GPIO_PULLDOWN_ENABLE,     // enable pull-down mode
         .intr_type = GPIO_INTR_POSEDGE            // interrupt on positive edge
-    };
+	};
 
-    _cassetteDev = new drivewireCassette();
+	_cassetteDev = new drivewireCassette();
 
     // configure GPIO with the given settings
     gpio_config(&io_conf);
@@ -499,14 +636,14 @@ void systemBus::setup()
     // If using an older Rev0 or Rev00 board, you will need to pull PIN_EPROM_A14 (IO36) up to 3.3V or 5V via a 10K
     // resistor to have it default to the previous default of 57600 baud otherwise they will both read as low and you
     // will get 38400 baud.
-    
+
     fnSystem.set_pin_mode(PIN_EPROM_A14, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_NONE);
     fnSystem.set_pin_mode(PIN_EPROM_A15, gpio_mode_t::GPIO_MODE_INPUT, SystemManager::pull_updown_t::PULL_NONE);
-    
-    #ifdef FORCE_UART_BAUD
+
+#ifdef FORCE_UART_BAUD
         Debug_printv("FORCE_UART_BAUD set to %u",FORCE_UART_BAUD);
         _drivewireBaud = FORCE_UART_BAUD;
-    #else
+#else
     if (fnSystem.digital_read(PIN_EPROM_A14) == DIGI_LOW && fnSystem.digital_read(PIN_EPROM_A15) == DIGI_LOW)
     {
         _drivewireBaud = 38400; //Coco1 ROM Image
@@ -514,8 +651,8 @@ void systemBus::setup()
     }
     else if (fnSystem.digital_read(PIN_EPROM_A14) == DIGI_HIGH && fnSystem.digital_read(PIN_EPROM_A15) == DIGI_LOW)
     {
-        _drivewireBaud = 57600; //Coco2 ROM Image 
-        Debug_printv("A14 High, A15 Low, 57600 baud");  
+        _drivewireBaud = 57600; //Coco2 ROM Image
+        Debug_printv("A14 High, A15 Low, 57600 baud");
     }
     else if  (fnSystem.digital_read(PIN_EPROM_A14) == DIGI_LOW && fnSystem.digital_read(PIN_EPROM_A15) == DIGI_HIGH)
     {
@@ -528,18 +665,33 @@ void systemBus::setup()
         Debug_printv("A14 and A15 High, defaulting to 57600 baud");
     }
 
-    #endif /* FORCE_UART_BAUD */
+#endif /* FORCE_UART_BAUD */
+#endif /* CONFIG_IDF_TARGET_ESP32S3 */
 #else
     // FujiNet-PC specific
     fnDwCom.set_serial_port(Config.get_serial_port().c_str()); // UART
-    _drivewireBaud = Config.get_serial_port_baud();
+    _drivewireBaud = Config.get_serial_baud();
 #endif
     fnDwCom.set_becker_host(Config.get_boip_host().c_str(), Config.get_boip_port()); // Becker
     fnDwCom.set_drivewire_mode(Config.get_boip_enabled() ? DwCom::dw_mode::BECKER : DwCom::dw_mode::SERIAL);
-    
+
     fnDwCom.begin(_drivewireBaud);
     fnDwCom.flush_input();
     Debug_printv("DRIVEWIRE MODE");
+
+// jeff hack to see if the S3 is getting serial data    
+    // Debug_println("now receiving data...");
+    // uint8_t b[] = {' '};
+    // while(1)
+    // {
+    //     while (fnDwCom.available())
+    //     {
+    //         fnDwCom.read(b,1);
+    //         Debug_printf("%c\n",b[0]);
+    //     }
+    // }
+// end jeff hack
+
 }
 
 // Give devices an opportunity to clean up before a reboot
