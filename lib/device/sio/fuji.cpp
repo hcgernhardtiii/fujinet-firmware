@@ -1,3 +1,4 @@
+#include "fujiCmd.h"
 #ifdef BUILD_ATARI
 
 #include "fuji.h"
@@ -32,6 +33,7 @@
 
 #include "base64.h"
 #include "hash.h"
+#include "../../qrcode/qrmanager.h"
 
 #define ADDITIONAL_DETAILS_BYTES 10
 
@@ -2180,6 +2182,135 @@ sioDisk *sioFuji::bootdisk()
     return &_bootDisk;
 }
 
+
+
+
+
+
+void sioFuji::sio_qrcode_input()
+{
+    uint16_t len = sio_get_aux();
+
+    Debug_printf("FUJI: QRCODE INPUT (len: %d)\n", len);
+
+    if (!len)
+    {
+        Debug_printf("Invalid length. Aborting");
+        sio_error();
+        return;
+    }
+
+    std::vector<unsigned char> p(len);
+    bus_to_peripheral(p.data(), len);
+    qrManager.in_buf += std::string((const char *)p.data(), len);
+    sio_complete();
+}
+
+void sioFuji::sio_qrcode_encode()
+{
+    size_t out_len = 0;
+
+    uint16_t aux = sio_get_aux();
+    qrManager.version = aux;
+    qrManager.ecc_mode = aux >> 8;
+
+    Debug_printf("FUJI: QRCODE ENCODE\n");
+    Debug_printf("QR Version: %d, ECC: %d\n", qrManager.version, qrManager.ecc_mode);
+
+    std::vector<uint8_t> p = QRManager::encode(
+        qrManager.in_buf.c_str(),
+        qrManager.in_buf.size(),
+        qrManager.version,
+        qrManager.ecc_mode,
+        &out_len
+    );
+
+    if (!out_len)
+    {
+        Debug_printf("QR code encoding failed\n");
+        sio_error();
+        return;
+    }
+
+    qrManager.in_buf.clear();
+
+    Debug_printf("Resulting QR code is: %u modules\n", out_len);
+    sio_complete();
+}
+
+void sioFuji::sio_qrcode_length()
+{
+    Debug_printf("FUJI: QRCODE LENGTH\n");
+    uint8_t output_mode = sio_get_aux();
+
+    // A bit gross to have a side effect from length command, but not enough aux bytes
+    // to specify version, ecc, *and* output mode for the encode command. Also can't
+    // just wait for output command, because output mode determines buffer length,
+    if (output_mode != qrManager.output_mode) {
+        if (output_mode == QR_OUTPUT_MODE_BITS) {
+            qrManager.to_bits();
+        }
+        if (output_mode == QR_OUTPUT_MODE_ATASCII) {
+            qrManager.to_atascii();
+        }
+        qrManager.output_mode = output_mode;
+    }
+
+    size_t l = qrManager.out_buf.size();
+
+    uint8_t response[4] = {
+        (uint8_t)(l >>  0),
+        (uint8_t)(l >>  8),
+        (uint8_t)(l >>  16),
+        (uint8_t)(l >>  24)
+    };
+
+    if (!l)
+    {
+        Debug_printf("QR code buffer is 0 bytes, sending error.\n");
+        bus_to_computer(response, sizeof(response), true);
+    }
+
+    Debug_printf("QR code buffer length: %u bytes\n", l);
+
+    bus_to_computer(response, sizeof(response), false);
+}
+
+void sioFuji::sio_qrcode_output()
+{
+    Debug_printf("FUJI: QRCODE OUTPUT\n");
+
+    size_t len = sio_get_aux();
+
+    if (!len)
+    {
+        Debug_printf("Refusing to send a zero byte buffer. Aborting\n");
+        return;
+    }
+    else if (len > qrManager.out_buf.size())
+    {
+        Debug_printf("Requested %u bytes, but buffer is only %u bytes, aborting.\n", len, qrManager.out_buf.size());
+        return;
+    }
+    else
+    {
+        Debug_printf("Requested %u bytes\n", len);
+    }
+
+    bus_to_computer(&qrManager.out_buf[0], len, false);
+
+    qrManager.out_buf.erase(qrManager.out_buf.begin(), qrManager.out_buf.begin()+len);
+    qrManager.out_buf.shrink_to_fit();
+
+}
+
+
+
+
+
+
+
+
 void sioFuji::sio_base64_encode_input()
 {
     uint16_t len = sio_get_aux();
@@ -2595,6 +2726,22 @@ void sioFuji::sio_process(uint32_t commanddata, uint8_t checksum)
     case FUJICMD_ENABLE_UDPSTREAM:
         sio_late_ack();
         sio_enable_udpstream();
+        break;
+    case FUJICMD_QRCODE_INPUT:
+        sio_ack();
+        sio_qrcode_input();
+        break;
+    case FUJICMD_QRCODE_ENCODE:
+        sio_ack();
+        sio_qrcode_encode();
+        break;
+    case FUJICMD_QRCODE_LENGTH:
+        sio_ack();
+        sio_qrcode_length();
+        break;
+    case FUJICMD_QRCODE_OUTPUT:
+        sio_ack();
+        sio_qrcode_output();
         break;
     case FUJICMD_BASE64_ENCODE_INPUT:
         sio_late_ack();
