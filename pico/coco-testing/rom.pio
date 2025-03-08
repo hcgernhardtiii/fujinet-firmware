@@ -1,0 +1,47 @@
+.define public CLKPIN     25
+.define public CTSPIN     26
+.define public ROMWIDTH   14
+.define public DATAWIDTH   8
+
+.program rom
+    wait 1 gpio CTSPIN          ; on clock falling edge
+    mov osr, null               ; turn off the outputs
+    out pindirs, DATAWIDTH
+    wait 0 gpio CTSPIN          ; wait until the CTS is low     
+    mov isr, y                  ; put the base address in ISR
+    in pins, ROMWIDTH           ; copy the 32-bit address into the ISR (auto push)
+    pull                        ; wait for the DMA to return a byte of ROM
+    out pins, DATAWIDTH                 ; output the rom bit value 
+    mov osr, ~null             ; enable the outputs
+    out pindirs, DATAWIDTH
+; note: can save 3 PIO instructions by using a set with sideset to switch the 8-bit databus pindirs
+; however, that''s a maximum of 8 bits. For larger, use the "mov osr, null; out pindirs" stucture
+
+
+% c-sdk {
+// this is a raw helper function for use by the user which sets up the GPIO input and output, and configures the SM to output on a particular pin
+
+void rom_program_init(PIO pio, uint sm, uint offset) {
+   // configure a SM
+   pio_sm_config c = rom_program_get_default_config(offset);
+   
+   // get 8 bit rom values through the OSR and output
+   sm_config_set_out_pins(&c, PINROMDATA, DATAWIDTH);
+   sm_config_set_out_shift(&c, true, false, DATAWIDTH); // no autopull because need to use OSR to set pindirs
+   
+   // start at in_pin to read in the phases and push to the FIFO
+   sm_config_set_in_pins(&c, PINROMADDR); 
+   sm_config_set_in_shift(&c, false, true, ROMWIDTH); // autopush
+
+   // use the CTS pin for JMP instruction
+   sm_config_set_jmp_pin(&c, CTSPIN);
+
+   // set out_pin as a GPIO output connected to this SM
+   for (int i = 0; i < DATAWIDTH; i++)
+	   pio_gpio_init(pio, PINROMDATA + i);
+   pio_sm_set_consecutive_pindirs(pio, sm, PINROMDATA, DATAWIDTH, false);
+   // sm_config_set_set_pins(&c, pin, 1);
+   // initialize
+   pio_sm_init(pio, sm, offset, &c);
+}
+%}

@@ -1,0 +1,93 @@
+.define public CLKPIN 25
+.define public SCSPIN 23
+.define public SCSWIDTH 5
+.define public DATAWIDTH 8
+.define public FULLWIDTH 13
+.define public RWPIN 24
+
+; We'll set the R/~W pin as our jump pin for both the read and write state
+;   machines
+
+.program becker_from_coco
+	wait 0 gpio SCSPIN					; Wait 'til the CoCo wants our attention
+	jmp pin becker_from_coco_cont	; This state machine doesn't do reads
+	wait 1 gpio CLKPIN [2]			; We'll wait a bit after E going high to
+									;   latch data
+	in pins, FULLWIDTH				; Grab the data and address
+becker_from_coco_cont:
+	wait 1 gpio SCSPIN				; Don't keep pushing—hold on until the
+									;   CoCo's done with us
+% c-sdk {
+	void becker_from_coco_program_init (PIO pio, uint sm, uint offset) {
+		// Get the configuration object for our state machine
+		pio_sm_config c = becker_from_coco_program_get_default_config (offset);
+
+		// Set the R/~W pin as our jump pin
+		sm_config_set_jmp_pin (&c, RWPIN);
+
+		// We'll be inputting 8 data bits and 5 address bits
+		sm_config_set_in_pins (&c, PINROMDATA);
+		sm_config_set_in_shift (&c, false, true, FULLWIDTH);
+		
+		// Initialize the state machine with this configuration
+		pio_sm_init (pio, sm, offset, &c);
+	}
+%}
+
+; For the becker_to_coco state machine:
+; - We need to bail out on writes, so we'll set the R/~W pin (RWPIN) as our
+;   jump pin.
+; - We want to send the bottom 5 bits of the address (SCSWIDTH) as soon as we
+;   receive them (autopush)
+.program becker_to_coco
+becker_to_coco_start:
+	wait 1 gpio SCSPIN				; Wait 'til the CoCo's done with us
+	mov osr, null					; Make sure we've de-asserted the data bus
+	out pindirs, DATAWIDTH			;   once the CoCo's done with us
+	wait 0 gpio SCSPIN				; Wait 'til the CoCo wants our attention
+	jmp pin becker_to_coco_continue	; This state machine doesn't do writes,
+	jmp becker_to_coco_start		; so bail out if it's asking for one.
+becker_to_coco_continue:
+	in pins, SCSWIDTH				; This is all the address we need to
+									;   determine whether or not to pay
+									;   attention to this request.  The value
+									;   we get back will be 16 bits in size:
+									;   the bottom 8 bits will tell us if this
+									;   is a valid port address (non-zero), and
+									;   the top 8 bits will be the data to
+									;   assert should the port be valid.
+	pull							; wait for the proc to give us our info
+	out x, DATAWIDTH				; We need to look at thos bottom 8 bits.
+	jmp !x becker_to_coco_start		; If it's zero, this port location isn't
+									;   amongst the droids we're looking for.
+	out pins, DATAWIDTH				; Otherwise, we're asserting the data onto
+	mov osr, ~null					;   the data bus.  Set it up first, then
+	out pindirs, DATAWIDTH			;   enable the outputs.
+
+% c-sdk {
+	void becker_to_coco_program_init (PIO pio, uint sm, uint offset) {
+		// Get the configuration object for our state machine
+		pio_sm_config c = becker_to_coco_program_get_default_config (offset);
+
+		// Set the R/~W pin as our jump pin
+		sm_config_set_jmp_pin (&c, RWPIN);
+
+		sm_config_set_out_pins(&c, PINROMDATA, DATAWIDTH);
+		// We don't want to autopull because we need the OSR to handle pin
+		//   directions
+		sm_config_set_out_shift(&c, true, false, DATAWIDTH);
+
+		// We'll be grabbing the bottom 5 bits of the address bus and autopushing
+		sm_config_set_in_pins (&c, PINROMADDR);
+		sm_config_set_in_shift (&c, false, true, SCSWIDTH);
+
+		// We don't need to do the GPIO pin function assignment if it's already been
+		//   done for this PIO block.  In our case, it has, because we've set up the
+		//   cart rom emulator *before* setting up the becker port.
+		// for (int i = 0; i < DATAWIDTH; i++)
+		// 	pio_gpio_init(pio, PINROMDATA + i);
+
+		// Initialize the state machine with this configuration
+		pio_sm_init (pio, sm, offset, &c);
+	}
+%}
